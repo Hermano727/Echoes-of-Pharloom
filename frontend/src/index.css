@@ -29,6 +29,13 @@
           text-stroke: 0.5px rgba(0, 0, 0, 0.35);
 }
 
+/* subtle minute fade animation */
+@keyframes minuteFade {
+  0% { opacity: 0.6; transform: translateY(-2px) scale(0.995); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.minute-fade { animation: minuteFade 400ms ease-out; }
+
 body {
   font-family: 'TrajanPro', 'Cinzel', serif;
 }
