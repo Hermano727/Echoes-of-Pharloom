@@ -11,7 +11,8 @@ pnpm-debug.log*
 **/build/
 
 # Frontend assets generated at runtime
-frontend/public/assets/
+/frontend/public/assets/videos/
+
 
 # Misc
 .DS_Store
