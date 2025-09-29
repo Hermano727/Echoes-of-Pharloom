@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import TimerControls from "./components/TimerControls";
 import BottomCredits from "./components/BottomCredits";
 import { STUDY_AREAS, getAreaByName } from "./config/areas";
 import { AudioManager, AudioState } from "./utils/audioManager";
 import { VideoManager, VideoState } from "./utils/videoManager";
 import { DEFAULT_TIMER_CONFIG, formatTime } from "./utils/timerUtils";
+import { startSession, appendEvent, completeSession } from './local/data';
+import type { SessionPlan } from './local/data';
 
 
 interface TimerState {
@@ -32,7 +35,7 @@ const exitFullscreen = async () => {
 
 const getStoredTimerState = (): TimerState | null => {
   try {
-    const storedState = localStorage.getItem('studyTimerState');
+    const storedState = localStorage.getItem('studyTimerState'); 
     if (storedState) {
       return JSON.parse(storedState);
     }
@@ -51,12 +54,76 @@ const saveTimerState = (state: TimerState) => {
 };
 
 const App: React.FC = () => {
+  // Read pending session plan synchronously (if coming from /create)
+  const location = useLocation() as any;
+  const bootPlanRef = useRef<SessionPlan | null>(null);
+  if (bootPlanRef.current === null) {
+    try {
+      if (location && location.state && location.state.plan) {
+        bootPlanRef.current = location.state.plan as SessionPlan;
+      } else {
+        const raw = localStorage.getItem('sessionPlan');
+        if (raw) bootPlanRef.current = JSON.parse(raw) as SessionPlan;
+      }
+    } catch { bootPlanRef.current = null; }
+  }
+
+  // Seed refs early so initializer can access them safely
+  const segmentsRef = useRef<{ area: string; durationSec: number }[]>([]);
+  const breakDurationRef = useRef<number>(0);
+  const lastPlanRef = useRef<SessionPlan | null>(null);
+
+  const computeSeconds = (plan: SessionPlan | null): number | null => {
+    if (!plan) return null;
+    // Segmented plan total
+    if (Array.isArray((plan as any).segments) && (plan as any).segments.length > 0) {
+      const segs = (plan as any).segments as { durationSec: number }[];
+      const total = segs.reduce((acc, s) => acc + Math.max(0, Math.floor(s.durationSec || 0)), 0);
+      return total > 0 ? total : null;
+    }
+    // Legacy totals
+    if (typeof plan.totalDurationSec === 'number') return Math.max(1, Math.floor(plan.totalDurationSec));
+    if (typeof plan.totalDurationMin === 'number') return Math.max(60, Math.floor(plan.totalDurationMin * 60));
+    return null;
+  };
+  const initialArea = (() => {
+    const p = bootPlanRef.current as any;
+    if (p && Array.isArray(p.segments) && p.segments.length > 0) return p.segments[0].area;
+    if (bootPlanRef.current && Array.isArray((bootPlanRef.current as any).areas) && (bootPlanRef.current as any).areas.length > 0) return (bootPlanRef.current as any).areas[0];
+    return 'choralchambers';
+  })();
+
   const [timerState, setTimerState] = useState<TimerState>(() => {
+    // If a boot plan exists with segments, set refs and start at first segment duration
+    const p = bootPlanRef.current as any;
+    if (p && Array.isArray(p.segments) && p.segments.length > 0) {
+      const segs = p.segments as { area: string; durationSec: number }[];
+      // seed refs for first render so Start uses correct plan immediately
+      segmentsRef.current = segs.map(s => ({ area: s.area, durationSec: Math.max(1, Math.floor(s.durationSec || 0)) }));
+      breakDurationRef.current = Math.max(0, Math.floor(p.breakDurationSec || 0));
+      lastPlanRef.current = p as SessionPlan;
+      return {
+        timeLeft: Math.max(1, Math.floor(segs[0].durationSec || 0)),
+        isRunning: false,
+        selectedAreaName: segs[0].area || initialArea,
+      };
+    }
+
+    const sec = computeSeconds(bootPlanRef.current);
+    if (sec !== null) {
+      return {
+        timeLeft: sec,
+        isRunning: false,
+        selectedAreaName: initialArea,
+      };
+    }
+
     const storedState = getStoredTimerState();
-    return storedState || {
+    if (storedState) return storedState;
+    return {
       timeLeft: DEFAULT_TIMER_CONFIG.defaultDuration,
       isRunning: false,
-      selectedAreaName: 'choralchambers',
+      selectedAreaName: initialArea,
     };
   });
 
@@ -85,6 +152,66 @@ const App: React.FC = () => {
   const [showConfirmReset, setShowConfirmReset] = useState(false);
   const wasRunningBeforeResetRef = useRef<boolean>(false);
 
+  // Study phases and break state
+  type Phase = 'running' | 'break' | 'completed';
+  const [phase, setPhase] = useState<Phase>('running');
+  const [breakRemaining, setBreakRemaining] = useState<number>(0);
+  const [segmentIndex, setSegmentIndex] = useState<number>(0);
+  // segmentsRef, breakDurationRef, lastPlanRef declared earlier for initializer
+  const [segmentRemaining, setSegmentRemaining] = useState<number>(0);
+
+  const initializeFromPlan = useCallback((plan: SessionPlan) => {
+    // Convert legacy plan to segments if needed
+    let normalized: SessionPlan = plan;
+    if ((!plan.segments || plan.segments.length === 0) && (plan.totalDurationSec || plan.totalDurationMin)) {
+      const total = typeof plan.totalDurationSec === 'number'
+        ? Math.max(1, Math.floor(plan.totalDurationSec))
+        : Math.max(60, Math.floor((plan.totalDurationMin ?? DEFAULT_TIMER_CONFIG.defaultDuration / 60) * 60));
+      const areas = (plan.areas && plan.areas.length > 0) ? plan.areas : [timerState.selectedAreaName];
+      const per = Math.floor(total / Math.max(1, areas.length));
+      const segments = areas.map(a => ({ area: a, durationSec: per }));
+      const remainder = total - per * areas.length;
+      if (segments.length > 0) segments[segments.length - 1].durationSec += remainder;
+      normalized = { segments, breakDurationSec: plan.breakDurationSec ?? Math.floor((plan.breakDurationMin ?? 0) * 60) } as SessionPlan;
+    }
+    console.log('[init] plan', normalized);
+    lastPlanRef.current = plan;
+    // Build segments from plan.segments or legacy
+    let segments: { area: string; durationSec: number }[] = [];
+    if (plan.segments && plan.segments.length > 0) {
+      segments = plan.segments.map(s => ({ area: s.area, durationSec: Math.max(1, Math.floor(s.durationSec)) }));
+    } else {
+      const total = typeof plan.totalDurationSec === 'number'
+        ? Math.max(1, Math.floor(plan.totalDurationSec))
+        : Math.max(60, Math.floor((plan.totalDurationMin ?? DEFAULT_TIMER_CONFIG.defaultDuration / 60) * 60));
+      const areas = (plan.areas && plan.areas.length > 0) ? plan.areas : [timerState.selectedAreaName];
+      const per = Math.floor(total / Math.max(1, areas.length));
+      segments = areas.map(a => ({ area: a, durationSec: per }));
+      // adjust last segment to absorb remainder
+      const remainder = total - per * areas.length;
+      if (segments.length > 0) segments[segments.length - 1].durationSec += remainder;
+    }
+
+    const breakSec = typeof plan.breakDurationSec === 'number'
+      ? Math.max(0, Math.floor(plan.breakDurationSec))
+      : Math.max(0, Math.floor((plan.breakDurationMin ?? (DEFAULT_TIMER_CONFIG.breakDuration ?? 300) / 60) * 60));
+
+    segmentsRef.current = segments;
+    breakDurationRef.current = breakSec;
+
+    setSegmentIndex(0);
+    setPhase('running');
+    setBreakRemaining(0);
+    setSegmentRemaining(segments[0]?.durationSec ?? 0);
+    setTimerState(prev => ({
+      ...prev,
+      timeLeft: segments[0]?.durationSec ?? prev.timeLeft,
+      selectedAreaName: segments[0]?.area ?? prev.selectedAreaName,
+      isRunning: false,
+    }));
+    try { localStorage.removeItem('studyTimerState'); } catch {}
+  }, [timerState.selectedAreaName]);
+
   // transient center-screen indicator for actions (YouTube-like)
   const [actionOverlay, setActionOverlay] = useState<ActionOverlayType>(null);
   const [showActionOverlay, setShowActionOverlay] = useState(false);
@@ -108,6 +235,36 @@ const App: React.FC = () => {
       videoManagerRef.current = new VideoManager(videoRef.current, setVideoState);
     }
   }, []);
+
+  // Apply session plan from localStorage if present
+  const didInitRef = useRef(false);
+  useEffect(() => {
+    if (didInitRef.current) return;
+    try {
+      let plan: SessionPlan | null = null;
+      if (bootPlanRef.current) {
+        console.log('[boot] using plan from bootPlanRef (state or localStorage)');
+        plan = bootPlanRef.current;
+      }
+      // If still null, try localStorage directly (in case boot ref missed)
+      if (!plan) {
+        try {
+          const raw = localStorage.getItem('sessionPlan');
+          if (raw) plan = JSON.parse(raw) as SessionPlan;
+        } catch {}
+      }
+      // If still null, build minimal fallback once
+      if (!plan) {
+        console.log('[boot] building fallback plan from current UI');
+        plan = { segments: [{ area: timerState.selectedAreaName, durationSec: timerState.timeLeft }], breakDurationSec: DEFAULT_TIMER_CONFIG.breakDuration ?? 300 } as SessionPlan;
+      }
+      initializeFromPlan(plan);
+      try { localStorage.removeItem('sessionPlan'); } catch {}
+      didInitRef.current = true;
+    } catch (e) {
+      console.warn('init failed', e);
+    }
+  }, [initializeFromPlan]);
 
   // cleanup for transient overlay timeout on unmount
   useEffect(() => {
@@ -135,14 +292,76 @@ const App: React.FC = () => {
   useEffect(() => {
     if (timerState.isRunning) {
       intervalRef.current = setInterval(() => {
-        setTimerState(prevState => {
-          const newTime = prevState.timeLeft - 1;
-          if (newTime <= 0) {
-            if (intervalRef.current) clearInterval(intervalRef.current);
-            return { ...prevState, timeLeft: 0, isRunning: false };
-          }
-          return { ...prevState, timeLeft: newTime };
-        });
+        if (phase === 'running') {
+          setSegmentRemaining(prev => {
+            if (prev <= 1) {
+              const nextIdx = segmentIndex + 1;
+              const hasNext = nextIdx < segmentsRef.current.length;
+              if (hasNext) {
+                if (breakDurationRef.current > 0) {
+                  console.log('[segment end] idx', segmentIndex, '-> break', breakDurationRef.current);
+                  audioManagerRef.current?.pause();
+                  videoManagerRef.current?.pause();
+                  setPhase('break');
+                  setBreakRemaining(breakDurationRef.current);
+                  try { if (sessionIdRef.current) appendEvent(sessionIdRef.current, { type: 'BreakReached', ts: Date.now() }); } catch {}
+                  try { new Audio('/assets/sounds/break_start.mp3').play().catch(() => {}); } catch {}
+                  // Keep isRunning=true so break autoplay countdown proceeds
+                  setTimerState(p => ({ ...p, isRunning: true, timeLeft: breakDurationRef.current }));
+                  return 0;
+                } else {
+                  console.log('[segment switch] immediate to idx', nextIdx);
+                  setSegmentIndex(nextIdx);
+                  const seg = segmentsRef.current[nextIdx];
+                  // Prefer crossfade but ensure playback with fallback retry
+                  const areaCfg = STUDY_AREAS[seg.area];
+                  if (areaCfg && audioManagerRef.current) {
+                    audioManagerRef.current.crossfadeTo({ name: areaCfg.name, displayName: areaCfg.displayName, audioPath: areaCfg.audioPath }).catch(() => {
+                      audioManagerRef.current?.loadAndPlayArea({ name: areaCfg.name, displayName: areaCfg.displayName, audioPath: areaCfg.audioPath }).catch(() => {});
+                    });
+                    setTimeout(() => { audioManagerRef.current?.play().catch(() => {}); }, 600);
+                  }
+                  setNowPlaying(areaCfg?.displayName || seg.area);
+                  scheduleHideNowPlaying();
+                  setSegmentRemaining(seg.durationSec);
+                  setTimerState(p => ({ ...p, selectedAreaName: seg.area, timeLeft: seg.durationSec }));
+                  return seg.durationSec;
+                }
+              } else {
+                console.log('[complete]');
+                if (intervalRef.current) clearInterval(intervalRef.current);
+                try { if (sessionIdRef.current) { completeSession(sessionIdRef.current, true); sessionIdRef.current = null; } } catch {}
+                audioManagerRef.current?.pause();
+                videoManagerRef.current?.pause();
+                try { new Audio('/assets/sounds/session_complete.mp3').play().catch(() => {}); } catch {}
+                setPhase('completed');
+                addToast('Session completed');
+                setTimerState(p => ({ ...p, timeLeft: 0, isRunning: false }));
+                return 0;
+              }
+            }
+            setTimerState(p => ({ ...p, timeLeft: prev - 1 }));
+            return prev - 1;
+          });
+        } else if (phase === 'break') {
+          setBreakRemaining(prev => {
+            if (prev <= 1) {
+              const nextIdx = segmentIndex + 1;
+              if (nextIdx < segmentsRef.current.length) {
+                setSegmentIndex(nextIdx);
+                const seg = segmentsRef.current[nextIdx];
+                console.log('[break end] -> start segment idx', nextIdx, seg);
+                startSegment(seg);
+                return 0;
+              } else {
+                setPhase('completed');
+                return 0;
+              }
+            }
+            setTimerState(p => ({ ...p, timeLeft: prev - 1 }));
+            return prev - 1;
+          });
+        }
       }, 1000);
     } else if (intervalRef.current) {
       clearInterval(intervalRef.current);
@@ -153,7 +372,7 @@ const App: React.FC = () => {
         clearInterval(intervalRef.current);
       }
     };
-  }, [timerState.isRunning]);
+  }, [timerState.isRunning, phase]);
 
   const triggerActionOverlay = useCallback((type: ActionOverlayType) => {
     if (!type) return;
@@ -167,12 +386,62 @@ const App: React.FC = () => {
     }, 650);
   }, []);
 
+  // Session/event engine wiring
+  const sessionIdRef = useRef<string | null>(null);
+  const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
+  const addToast = useCallback((text: string) => {
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    setToasts(t => [...t, { id, text }]);
+    window.setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 2400);
+  }, []);
+
   const onStart = useCallback(() => {
+    // If session previously completed, fully re-initialize from last plan
+    if (phase === 'completed' && lastPlanRef.current) {
+      initializeFromPlan(lastPlanRef.current);
+      // reset media to ensure fresh start
+      audioManagerRef.current?.reset();
+      videoManagerRef.current?.reset();
+      setTimeout(() => {
+        // new local session
+        try {
+          const { sessionId } = startSession(lastPlanRef.current!);
+          sessionIdRef.current = sessionId;
+        } catch {}
+        setTimerState(prev => ({ ...prev, isRunning: true }));
+        audioManagerRef.current?.play().catch(() => {});
+        videoManagerRef.current?.play().catch(() => {});
+      }, 100);
+      triggerActionOverlay('play');
+      return;
+    } else {
+      // start local session if not already started
+      if (!sessionIdRef.current) {
+        try {
+          const plan: SessionPlan = lastPlanRef.current ?? {
+            segments: (segmentsRef.current && segmentsRef.current.length > 0)
+              ? segmentsRef.current.map(s => ({ area: s.area, durationSec: s.durationSec }))
+              : [{ area: timerState.selectedAreaName, durationSec: timerState.timeLeft }],
+            breakDurationSec: breakDurationRef.current,
+          };
+          // if we just constructed a plan, initialize refs too
+          if (!lastPlanRef.current) initializeFromPlan(plan);
+          const { sessionId } = startSession(plan);
+          sessionIdRef.current = sessionId;
+        } catch (e) {
+          console.warn('Failed to start local session', e);
+        }
+      }
+    }
+
     setTimerState(prevState => ({ ...prevState, isRunning: true }));
-    audioManagerRef.current?.play().catch(e => console.error("Audio play error:", e));
-    videoManagerRef.current?.play().catch(e => console.error("Video play error:", e));
+    // slight delay to let media load if area changed during init
+    setTimeout(() => {
+      audioManagerRef.current?.play().catch(e => console.error("Audio play error:", e));
+      videoManagerRef.current?.play().catch(e => console.error("Video play error:", e));
+    }, 150);
     triggerActionOverlay('play');
-  }, [triggerActionOverlay]);
+  }, [phase, initializeFromPlan, triggerActionOverlay, timerState.timeLeft, timerState.selectedAreaName]);
 
   const onPause = useCallback(() => {
     setTimerState(prevState => ({ ...prevState, isRunning: false }));
@@ -181,6 +450,33 @@ const App: React.FC = () => {
     triggerActionOverlay('pause');
   }, [triggerActionOverlay]);
 
+  // Now playing overlay
+  const [nowPlaying, setNowPlaying] = useState<string | null>(null);
+  const nowPlayingTimer = useRef<number | null>(null);
+  const scheduleHideNowPlaying = useCallback(() => {
+    if (nowPlayingTimer.current) window.clearTimeout(nowPlayingTimer.current);
+    nowPlayingTimer.current = window.setTimeout(() => setNowPlaying(null), 1500);
+  }, []);
+
+  // Start a segment reliably: set times, area, ensure audio plays (with retries), and resume video
+  const startSegment = useCallback((seg: { area: string; durationSec: number }) => {
+    setSegmentRemaining(seg.durationSec);
+    const areaCfg = STUDY_AREAS[seg.area];
+    if (areaCfg && audioManagerRef.current) {
+      audioManagerRef.current.loadAndPlayArea({ name: areaCfg.name, displayName: areaCfg.displayName, audioPath: areaCfg.audioPath }).catch(() => {});
+      // Fallback retries to overcome any autoplay races
+      setTimeout(() => { audioManagerRef.current?.play().catch(() => {}); }, 200);
+      setTimeout(() => { audioManagerRef.current?.play().catch(() => {}); }, 600);
+    }
+    setNowPlaying(areaCfg?.displayName || seg.area);
+    scheduleHideNowPlaying();
+    setTimerState(p => ({ ...p, selectedAreaName: seg.area, timeLeft: seg.durationSec, isRunning: true }));
+    setPhase('running');
+    setTimeout(() => {
+      videoManagerRef.current?.play().catch(() => {});
+    }, 120);
+  }, [scheduleHideNowPlaying]);
+
   // Request to reset: pause everything and ask for confirmation
   const onReset = useCallback(() => {
     wasRunningBeforeResetRef.current = timerState.isRunning;
@@ -188,15 +484,45 @@ const App: React.FC = () => {
     audioManagerRef.current?.pause();
     videoManagerRef.current?.pause();
     setShowConfirmReset(true);
-  }, [timerState.isRunning]);
+  }, [timerState.isRunning, phase, segmentIndex]);
+
+  // Removed separate break countdown effects; handled in main interval
+
+  // Focus lost detection -> append event + toast
+  useEffect(() => {
+    const onBlur = () => {
+      if (!timerState.isRunning) return;
+      try {
+        if (sessionIdRef.current) {
+          appendEvent(sessionIdRef.current, { type: 'FocusLost', ts: Date.now() });
+        }
+      } catch {}
+      addToast('Focus lost detected');
+    };
+    const onVisibility = () => {
+      if (document.hidden) onBlur();
+    };
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [timerState.isRunning, addToast]);
 
   const confirmReset = useCallback(() => {
-    setTimerState(prev => ({ ...prev, timeLeft: DEFAULT_TIMER_CONFIG.defaultDuration, isRunning: false }));
+    // Re-initialize current plan to restart session to its beginning
+    if (lastPlanRef.current) {
+      initializeFromPlan(lastPlanRef.current);
+    } else {
+      // minimal fallback: restart current selected area for current duration
+      initializeFromPlan({ segments: [{ area: timerState.selectedAreaName, durationSec: timerState.timeLeft }], breakDurationSec: breakDurationRef.current } as SessionPlan);
+    }
     audioManagerRef.current?.reset();
     videoManagerRef.current?.reset();
     setShowConfirmReset(false);
     triggerActionOverlay('reset');
-  }, [triggerActionOverlay]);
+  }, [initializeFromPlan, triggerActionOverlay, timerState.selectedAreaName]);
 
   const cancelReset = useCallback(() => {
     setShowConfirmReset(false);
@@ -219,14 +545,6 @@ const App: React.FC = () => {
     }
   }, [audioState.volume]);
 
-  const onAreaChange = useCallback((newAreaName: string) => {
-    setTimerState(prevState => ({
-      ...prevState,
-      selectedAreaName: newAreaName,
-      timeLeft: DEFAULT_TIMER_CONFIG.defaultDuration,
-      isRunning: false
-    }));
-  }, []);
 
   const onToggleCollapse = useCallback(() => {
     setIsCollapsed(prev => {
@@ -319,11 +637,13 @@ const App: React.FC = () => {
     }
   }, [timerState.timeLeft, timerState.isRunning]);
 
+  const navigate = useNavigate();
+
   return (
-    <div
-      ref={rootRef}
-      className="relative w-screen h-screen overflow-hidden text-white bg-black font-trajan"
-      onMouseMove={() => {
+      <div
+        ref={rootRef}
+        className="relative w-screen h-screen overflow-hidden text-white bg-black font-trajan"
+        onMouseMove={() => {
         if (!isCollapsed) return;
         setShowUi(true);
       }}
@@ -366,10 +686,28 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Toasts */}
+      {toasts.length > 0 && (
+        <div className="absolute top-4 right-4 z-30 space-y-2">
+          {toasts.map(t => (
+            <div key={t.id} className="px-4 py-2 rounded-md bg-red-700/80 border border-white/20 text-sm shadow">
+              {t.text}
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="relative z-10 flex flex-col items-center justify-center w-full h-full p-4 md:p-8">
 
+        {/* Now Playing overlay */}
+        {nowPlaying && (
+          <div className="absolute top-24 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-black/55 border border-white/20 text-white/90 tracking-wide">
+            Now playing: {nowPlaying}
+          </div>
+        )}
+
         <div
-          className={`absolute left-1/2 -translate-x-1/2 top-[18%] md:top-[14%] lg:top-[12%] flex items-center justify-center p-4 transition-all duration-1000 ${isCollapsed ? '' : ''}`}
+className={`absolute left-1/2 -translate-x-1/2 top-[18%] md:top-[14%] lg:top-[12%] flex items-center justify-center p-4 transition-all duration-1000 ${isCollapsed ? '' : ''}`}
           aria-label="Study timer"
         >
           <img
@@ -380,8 +718,19 @@ const App: React.FC = () => {
             aria-hidden="true"
             onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
           />
+
+          {/* Celebrate ring */}
+          {phase === 'completed' && (
+            <div className="absolute -inset-2 animate-celebrate rounded-full border-2 border-white/70" />
+          )}
+
+          {/* Break label */}
+          {phase === 'break' && (
+            <div className="absolute -top-10 text-2xl tracking-wider bg-white/15 px-4 py-1 rounded-full border border-white/30">Break</div>
+          )}
+
           <p className={`relative z-10 font-trajan timer-glow timer-stroke text-white text-[4.6rem] md:text-[6.2rem] lg:text-[6rem] font-normal tracking-wide text-center select-none ${minuteFlash ? 'minute-fade' : ''}`}>
-            {formatTime(timerState.timeLeft)}
+            {phase === 'break' ? formatTime(breakRemaining) : formatTime(timerState.timeLeft)}
           </p>
         </div>
         
@@ -399,8 +748,7 @@ const App: React.FC = () => {
               canStart={audioState.isLoaded}
               isCollapsed={isCollapsed}
               onToggleCollapse={onToggleCollapse}
-              selectedAreaName={timerState.selectedAreaName}
-              onAreaChange={onAreaChange}
+              currentAreaName={timerState.selectedAreaName}
               volume={audioState.volume}
               onVolumeChange={onVolumeChange}
               volumeEnabled={audioState.isLoaded}
@@ -411,14 +759,37 @@ const App: React.FC = () => {
 
 
         {( !isCollapsed || showUi ) && (
-          <button
-            onClick={onToggleDebugInfo}
-            className={`absolute top-4 right-4 z-20 p-2 text-white rounded-full transition-colors ${showDebugInfo ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-white/20 hover:bg-white/40'}`}
-            aria-label="Toggle Debug Info"
-            title="Toggle Debug Info"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bug"><path d="M10 20h4"/><path d="M10 20a5 5 0 0 1-5-5V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a5 5 0 0 1-5 5Z"/><path d="M13 10h-2"/><path d="M12 17v-4"/><path d="M20 7l-4.2 4.2"/><path d="M4 7l4.2 4.2"/></svg>
-          </button>
+          <>
+            {/* Top-left quick actions */}
+            <div className="absolute top-4 left-4 z-20 flex gap-2">
+              <button
+                onClick={() => navigate('/')}
+                className="p-2 text-white rounded-full bg-white/20 hover:bg-white/40 transition-colors"
+                aria-label="Go Home"
+                title="Home"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7"/><path d="M9 22V12h6v10"/></svg>
+              </button>
+              <button
+                onClick={() => navigate('/create')}
+                className="p-2 text-white rounded-full bg-white/20 hover:bg-white/40 transition-colors"
+                aria-label="Create Session"
+                title="Create Session"
+              >
+                <img src="/assets/ui/edit.svg" alt="Create Session" className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Debug toggle (top-right) */}
+            <button
+              onClick={onToggleDebugInfo}
+              className={`absolute top-4 right-4 z-20 p-2 text-white rounded-full transition-colors ${showDebugInfo ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-white/20 hover:bg-white/40'}`}
+              aria-label="Toggle Debug Info"
+              title="Toggle Debug Info"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bug"><path d="M10 20h4"/><path d="M10 20a5 5 0 0 1-5-5V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a5 5 0 0 1-5 5Z"/><path d="M13 10h-2"/><path d="M12 17v-4"/><path d="M20 7l-4.2 4.2"/><path d="M4 7l4.2 4.2"/></svg>
+            </button>
+          </>
         )}
       </div>
 

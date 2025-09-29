@@ -1,0 +1,21 @@
+# Node
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# CDK / build
+**/cdk.out/
+**/dist/
+**/build/
+
+# Frontend assets generated at runtime
+frontend/public/assets/
+
+# Misc
+.DS_Store
+*.local
+.env
+.env.*
+WARP.md

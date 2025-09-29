@@ -56,7 +56,26 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
   const vertical = orientation === 'vertical';
   const compact = variant === 'compact';
 
-  const [hovered, setHovered] = React.useState(false);
+  const [anchorHover, setAnchorHover] = React.useState(false);
+  const [popoverHover, setPopoverHover] = React.useState(false);
+  const hideTimerRef = React.useRef<number | null>(null);
+
+  const setAnchorHoverSafe = (val: boolean) => {
+    if (hideTimerRef.current) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+    if (!val) {
+      // small delay to allow moving into popover without flicker
+      hideTimerRef.current = window.setTimeout(() => {
+        setAnchorHover(false);
+      }, 120);
+    } else {
+      setAnchorHover(true);
+    }
+  };
+
+  const visible = vertical && revealOnHover && placement === 'popover' ? (anchorHover || popoverHover) : undefined;
 
   return (
     <>
@@ -127,11 +146,11 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
           vertical ? 'w-auto' : 'min-w-[12rem] w-full',
           'group'
         ].join(' ')}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+        onMouseEnter={() => setAnchorHoverSafe(true)}
+        onMouseLeave={() => setAnchorHoverSafe(false)}
       >
         {/* Slider */}
-        {vertical && (!revealOnHover || hovered) && placement === 'inline' && (
+        {vertical && (!revealOnHover || anchorHover) && placement === 'inline' && (
           <div className='flex items-center justify-center w-9 h-44 pt-2 pb-1'>
             <input
               type="range"
@@ -151,8 +170,12 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
           </div>
         )}
 
-        {vertical && revealOnHover && placement === 'popover' && hovered && (
-<div className='absolute bottom-full right-0 mb-2 w-10 h-48 bg-black/55 rounded-full backdrop-blur-sm shadow-lg flex items-center justify-center pointer-events-auto z-30'>
+        {vertical && revealOnHover && placement === 'popover' && visible && (
+          <div
+            className='absolute bottom-full right-0 mb-2 w-10 h-48 bg-black/55 rounded-full backdrop-blur-sm shadow-lg flex items-center justify-center pointer-events-auto z-30'
+            onMouseEnter={() => setPopoverHover(true)}
+            onMouseLeave={() => setPopoverHover(false)}
+          >
             <input
               type="range"
               min="0"

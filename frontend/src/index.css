@@ -39,3 +39,12 @@
 body {
   font-family: 'TrajanPro', 'Cinzel', serif;
 }
+
+@keyframes celebratePulse {
+  0% { box-shadow: 0 0 0 0 rgba(255,255,255,0.6); opacity: 1; }
+  70% { box-shadow: 0 0 0 18px rgba(255,255,255,0); opacity: 0.9; }
+  100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); opacity: 0.95; }
+}
+.animate-celebrate {
+  animation: celebratePulse 1200ms ease-out 1;
+}

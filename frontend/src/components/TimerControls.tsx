@@ -1,6 +1,6 @@
 import React from 'react';
-import AreaSelector from './AreaSelector';
 import VolumeControl from '../utils/VolumeControl';
+import { STUDY_AREAS } from '../config/areas';
 
 interface TimerControlsProps {
   isRunning: boolean;
@@ -10,8 +10,7 @@ interface TimerControlsProps {
   canStart: boolean;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  selectedAreaName: string;
-  onAreaChange: (areaName: string) => void;
+  currentAreaName: string;
   volume: number;
   onVolumeChange: (v: number) => void;
   volumeEnabled: boolean;
@@ -26,13 +25,13 @@ const TimerControls: React.FC<TimerControlsProps> = ({
   canStart,
   isCollapsed,
   onToggleCollapse,
-  selectedAreaName,
-  onAreaChange,
+  currentAreaName,
   volume,
   onVolumeChange,
   volumeEnabled,
   onVolumeAction,
 }) => {
+  const displayName = STUDY_AREAS[currentAreaName]?.displayName ?? currentAreaName;
   return (
     <div className="w-full p-4 flex justify-between items-center pointer-events-auto bg-gradient-to-t from-black via-transparent to-transparent">
       <div className="flex items-center space-x-2">
@@ -67,7 +66,9 @@ const TimerControls: React.FC<TimerControlsProps> = ({
       </div>
 
       <div className="flex items-center space-x-4">
-        <AreaSelector selectedAreaName={selectedAreaName} onAreaChange={onAreaChange} />
+        <div className="px-3 py-2 rounded-full bg-black/45 border border-white/20 text-white/90 tracking-wide">
+          {displayName}
+        </div>
         <div className="relative">
           <VolumeControl
             volume={volume}

@@ -8,7 +8,7 @@ export interface StudyArea {
 export const STUDY_AREAS: { [key: string]: StudyArea } = {
     bonebottom: {
         name: 'bonebottom',
-        displayName: 'Bone Bottom',
+        displayName: 'Bonebottom',
         audioPath: '/assets/sounds/bone_bottom.mp3',
         videoPath: '/assets/videos/bench_short.mp4',
     },
@@ -26,7 +26,7 @@ export const STUDY_AREAS: { [key: string]: StudyArea } = {
     },
     hunters: {
         name: 'hunters',
-        displayName: 'Hunter\'s Path',
+        displayName: "Hunter's Path",
         audioPath: '/assets/sounds/hunters_path.mp3',
         videoPath: '/assets/videos/hunters_path.mp4',
     },
