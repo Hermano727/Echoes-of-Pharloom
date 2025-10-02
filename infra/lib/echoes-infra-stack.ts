@@ -1,5 +1,7 @@
 import * as path from 'path';
-import { Duration, RemovalPolicy, CfnOutput, Stack, StackProps, Fn, Names } from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib'
+import * as cognito from 'aws-cdk-lib/aws-cognito'
+import { Duration, RemovalPolicy, CfnOutput, Stack, StackProps } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { Table, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
@@ -7,8 +9,7 @@ import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { HttpApi, CorsPreflightOptions, CorsHttpMethod, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import * as cognito from 'aws-cdk-lib/aws-cognito';
-import { HttpUserPoolAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
+import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 
 export class EchoesInfraStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -20,18 +21,98 @@ export class EchoesInfraStack extends Stack {
       partitionKey: { name: 'PK', type: AttributeType.STRING },
       sortKey: { name: 'SK', type: AttributeType.STRING },
       billingMode: BillingMode.PAY_PER_REQUEST,
-      removalPolicy: RemovalPolicy.DESTROY, // dev only; consider RETAIN for prod
+      removalPolicy: RemovalPolicy.DESTROY, // Note: dev-only; consider RETAIN for prod
       pointInTimeRecovery: false,
     });
 
-    // Lambdas
+    // Create Cognito User Pool
+    const userPool = new cognito.UserPool(this, 'EchoesUserPool', {
+      userPoolName: 'echoes-of-pharloom',
+
+      signInAliases: {
+        email: true,
+        phone: true,
+        username: true,
+      },
+
+      selfSignUpEnabled: true,
+
+      standardAttributes: {
+        email: {
+          required: true,
+          mutable: true,
+        },
+      },
+
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: true,
+      },
+
+      accountRecovery: cognito.AccountRecovery.PHONE_AND_EMAIL,
+
+      autoVerify: {
+        email: true,
+      },
+
+      // need to change to RETAIN later for prod
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const userPoolClient = new cognito.UserPoolClient(this, 'EchoesUserPoolClient', {
+      userPool,
+      userPoolClientName: 'echoes-react-client',
+      
+      authFlows: {
+        userSrp: true,
+        userPassword: false,
+        adminUserPassword: false,
+      },
+      
+      oAuth: {
+        flows: {
+          authorizationCodeGrant: true,
+        },
+        scopes: [
+          cognito.OAuthScope.EMAIL,
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.PROFILE,
+        ],
+        callbackUrls: [
+          'http://localhost:3000/auth/callback', // Development
+          // Add production URLs later: 'https://yourdomain.com/auth/callback'
+        ],
+        logoutUrls: [
+          'http://localhost:3000/', // Development
+          // Add production URLs later: 'https://yourdomain.com/'
+        ],
+      },
+
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(30),
+      
+      preventUserExistenceErrors: true,
+    });
+
+    // Create JWT Authorizer for HTTP API v2
+    const jwtAuthorizer = new HttpJwtAuthorizer('EchoesJwtAuthorizer', `https://cognito-idp.${this.region}.amazonaws.com/${userPool.userPoolId}`, {
+      jwtAudience: [userPoolClient.userPoolClientId],
+    });
+
+    // Lambda functions
     const listAreasFn = new NodejsFunction(this, 'ListAreasFn', {
       entry: path.join(__dirname, '../../services/api/listAreas.ts'),
       runtime: Runtime.NODEJS_20_X,
       memorySize: 256,
       timeout: Duration.seconds(5),
       bundling: { minify: true, target: 'es2020' },
-      environment: { TABLE_NAME: table.tableName },
+      environment: {
+        TABLE_NAME: table.tableName,
+      },
       logRetention: RetentionDays.ONE_WEEK,
     });
 
@@ -41,7 +122,9 @@ export class EchoesInfraStack extends Stack {
       memorySize: 256,
       timeout: Duration.seconds(5),
       bundling: { minify: true, target: 'es2020' },
-      environment: { TABLE_NAME: table.tableName },
+      environment: {
+        TABLE_NAME: table.tableName,
+      },
       logRetention: RetentionDays.ONE_WEEK,
     });
 
@@ -49,9 +132,11 @@ export class EchoesInfraStack extends Stack {
       entry: path.join(__dirname, '../../services/api/createSession.ts'),
       runtime: Runtime.NODEJS_20_X,
       memorySize: 256,
-      timeout: Duration.seconds(10),
+      timeout: Duration.seconds(5),
       bundling: { minify: true, target: 'es2020' },
-      environment: { TABLE_NAME: table.tableName },
+      environment: {
+        TABLE_NAME: table.tableName,
+      },
       logRetention: RetentionDays.ONE_WEEK,
     });
 
@@ -59,9 +144,11 @@ export class EchoesInfraStack extends Stack {
       entry: path.join(__dirname, '../../services/api/appendEvent.ts'),
       runtime: Runtime.NODEJS_20_X,
       memorySize: 256,
-      timeout: Duration.seconds(10),
+      timeout: Duration.seconds(5),
       bundling: { minify: true, target: 'es2020' },
-      environment: { TABLE_NAME: table.tableName },
+      environment: {
+        TABLE_NAME: table.tableName,
+      },
       logRetention: RetentionDays.ONE_WEEK,
     });
 
@@ -70,74 +157,73 @@ export class EchoesInfraStack extends Stack {
     table.grantReadWriteData(createSessionFn);
     table.grantReadWriteData(appendEventFn);
 
-    // Cognito User Pool + Client (Hosted UI domain can be added later for uniqueness)
-    const userPool = new cognito.UserPool(this, 'EchoesUserPool', {
-      selfSignUpEnabled: true,
-      signInAliases: { email: true },
-      standardAttributes: { email: { required: true, mutable: true } },
-      passwordPolicy: { minLength: 8, requireLowercase: true, requireUppercase: true, requireDigits: true },
-      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: RemovalPolicy.DESTROY,
-    });
-
-    const userPoolClient = new cognito.UserPoolClient(this, 'EchoesWebClient', {
-      userPool,
-      generateSecret: false,
-      preventUserExistenceErrors: true,
-      oAuth: {
-        flows: { authorizationCodeGrant: true },
-        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
-        callbackUrls: ['http://localhost:3000/auth/callback'],
-        logoutUrls: ['http://localhost:3000/'],
-      },
-    });
-
-    // JWT authorizer for HTTP API using Cognito User Pool
-    const authorizer = new HttpUserPoolAuthorizer('CognitoAuthorizer', userPool, {
-      userPoolClients: [userPoolClient],
-    });
-
     // HTTP API with CORS for local dev
     const httpApi = new HttpApi(this, 'EchoesHttpApi', {
       corsPreflight: {
         allowHeaders: ['*'],
-        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST, CorsHttpMethod.OPTIONS],
+        allowMethods: [
+          CorsHttpMethod.GET,
+          CorsHttpMethod.POST,
+          CorsHttpMethod.OPTIONS,
+        ],
         allowOrigins: ['*'],
         maxAge: Duration.days(10),
       } as CorsPreflightOptions,
     });
 
-    // Public route
+    // Public routes (no authentication required)
     httpApi.addRoutes({
       path: '/areas',
       methods: [HttpMethod.GET],
       integration: new HttpLambdaIntegration('AreasIntegration', listAreasFn),
     });
 
-    // Protected routes (require Cognito JWT)
+    // Protected routes (authentication required)
     httpApi.addRoutes({
       path: '/home',
       methods: [HttpMethod.GET],
       integration: new HttpLambdaIntegration('HomeIntegration', getHomeFn),
-      // Keep public for now to avoid breaking existing frontend; can protect later
+      authorizer: jwtAuthorizer,
     });
 
     httpApi.addRoutes({
       path: '/sessions',
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration('CreateSessionIntegration', createSessionFn),
-      authorizer,
+      authorizer: jwtAuthorizer,
     });
 
     httpApi.addRoutes({
-      path: '/sessions/{id}/events',
+      path: '/sessions/{sessionId}/events',
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration('AppendEventIntegration', appendEventFn),
-      authorizer,
+      authorizer: jwtAuthorizer,
     });
 
-    new CfnOutput(this, 'ApiUrl', { value: httpApi.apiEndpoint });
-    new CfnOutput(this, 'UserPoolId', { value: userPool.userPoolId });
-    new CfnOutput(this, 'UserPoolClientId', { value: userPoolClient.userPoolClientId });
+    // Stack outputs
+    new CfnOutput(this, 'ApiUrl', { 
+      value: httpApi.apiEndpoint,
+      description: 'HTTP API endpoint'
+    });
+
+    new CfnOutput(this, 'UserPoolId', {
+      value: userPool.userPoolId,
+      description: 'Cognito User Pool ID',
+    });
+
+    new CfnOutput(this, 'UserPoolClientId', {
+      value: userPoolClient.userPoolClientId,
+      description: 'Cognito User Pool Client ID',
+    });
+
+    new CfnOutput(this, 'Region', {
+      value: this.region,
+      description: 'AWS Region',
+    });
+
+    new CfnOutput(this, 'UserPoolDomain', {
+      value: `https://cognito-idp.${this.region}.amazonaws.com/${userPool.userPoolId}`,
+      description: 'Cognito User Pool Domain for JWT validation',
+    });
   }
 }

@@ -8,6 +8,7 @@ interface Area { id: string; name: string }
 const Home: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, signIn, signOut } = useAuth();
+  const [menuOpen, setMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [areas, setAreas] = useState<Area[]>([]);
@@ -47,7 +48,25 @@ const Home: React.FC = () => {
         {/* Auth action top-right */}
         <div className="absolute top-4 right-4">
           {isAuthenticated ? (
-            <button onClick={signOut} className="px-4 py-2 rounded-full bg-white/20 hover:bg-white/35 transition-colors">Sign out{user?.name ? ` (${user.name})` : ''}</button>
+            <div className="relative">
+              <button
+                onClick={() => setMenuOpen(v => !v)}
+                className="flex items-center gap-2 px-3 py-2 rounded-full bg-white/20 hover:bg-white/35 transition-colors"
+              >
+                <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-white/80 text-black font-semibold">
+                  {user?.name?.[0]?.toUpperCase() || user?.id?.[0]?.toUpperCase() || 'U'}
+                </span>
+                <span className="hidden sm:block">{user?.name || 'Account'}</span>
+              </button>
+              {menuOpen && (
+                <div className="absolute right-0 mt-2 w-44 rounded-lg bg-black/80 border border-white/15 shadow-lg overflow-hidden">
+                  <button
+                    onClick={() => { setMenuOpen(false); signOut(); }}
+                    className="w-full text-left px-4 py-2 hover:bg-white/10"
+                  >Sign out</button>
+                </div>
+              )}
+            </div>
           ) : (
             <button onClick={signIn} className="px-4 py-2 rounded-full bg-white/20 hover:bg-white/35 transition-colors">Sign in</button>
           )}

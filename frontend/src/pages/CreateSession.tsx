@@ -44,7 +44,7 @@ const CreateSession: React.FC = () => {
 
   const canStart = validSegments && (!testMode ? !tooLongBreakMin : !tooLongBreakSec);
 
-  const onStart = () => {
+  const onStart = async () => {
     const plan: SessionPlan = {
       segments: segments.map(s => ({ area: s.area, durationSec: testMode ? s.duration : s.duration * 60 })),
       breakDurationSec: testMode ? Math.max(0, Math.floor(breakDurationSec)) : Math.max(0, Math.floor(breakDurationMin * 60)),
@@ -52,6 +52,21 @@ const CreateSession: React.FC = () => {
     console.log('[create plan]', plan);
     try { localStorage.removeItem('studyTimerState'); } catch {}
     try { localStorage.setItem('sessionPlan', JSON.stringify(plan)); } catch {}
+
+    // If authenticated and API configured, create a session in backend now
+    try {
+      const rawTok = localStorage.getItem('authTokens');
+      const hasAuth = !!rawTok;
+      const base = (window as any).API_BASE || undefined; // optional global
+      if (hasAuth) {
+        const mod = await import('../api');
+        const res = await mod.createSession(plan);
+        if (res?.sessionId) localStorage.setItem('currentSessionId', res.sessionId);
+      }
+    } catch (e) {
+      console.warn('Backend create session failed or not authenticated; continuing local-only', e);
+    }
+
     navigate('/study', { state: { plan } });
   };
 

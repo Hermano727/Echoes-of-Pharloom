@@ -1,6 +1,24 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getAuthConfig, isCognitoConfigured } from '../config/auth';
+import { PKCE_VERIFIER_KEY } from '../auth/AuthContext';
+
+function decodeJwtPayload<T = any>(jwt: string): T | null {
+  try {
+    const parts = jwt.split('.');
+    if (parts.length < 2) return null;
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const json = decodeURIComponent(
+      atob(b64)
+        .split('')
+        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
 
 const AuthCallback: React.FC = () => {
   const [msg, setMsg] = useState('Completing sign-in...');
@@ -8,24 +26,64 @@ const AuthCallback: React.FC = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const hasCognito = isCognitoConfigured();
-    const code = params.get('code');
-    const error = params.get('error');
-    if (error) {
-      setMsg(`Auth error: ${error}`);
-      setTimeout(() => navigate('/'), 1200);
-      return;
-    }
-    if (hasCognito && code) {
-      // TODO: Exchange code for tokens against Cognito token endpoint (requires proper CORS and public client)
-      // For now, show a placeholder and return to home.
-      setMsg('Auth configured — token exchange to be implemented after AWS setup. Redirecting...');
-      setTimeout(() => navigate('/'), 1200);
-      return;
-    }
-    // If no Cognito configured, just go home
-    setMsg('Auth not configured, returning home...');
-    setTimeout(() => navigate('/'), 800);
+    (async () => {
+      const hasCognito = isCognitoConfigured();
+      const code = params.get('code');
+      const error = params.get('error');
+      if (error) {
+        setMsg(`Auth error: ${error}`);
+        setTimeout(() => navigate('/'), 1200);
+        return;
+      }
+      if (hasCognito && code) {
+        try {
+          const cfg = getAuthConfig();
+          if (!cfg.cognitoDomain || !cfg.clientId || !cfg.redirectUri) throw new Error('Missing auth config');
+          const verifier = sessionStorage.getItem(PKCE_VERIFIER_KEY) || '';
+          if (!verifier) {
+            console.warn('No PKCE verifier found; start sign-in from the app again.');
+            setMsg('Session expired. Please sign in again.');
+            setTimeout(() => navigate('/'), 1200);
+            return;
+          }
+          const tokenUrl = (cfg.cognitoDomain.startsWith('http') ? `${cfg.cognitoDomain.replace(/\/$/, '')}` : `https://${cfg.cognitoDomain}`) + '/oauth2/token';
+          const form = new URLSearchParams({
+            grant_type: 'authorization_code',
+            client_id: cfg.clientId,
+            code,
+            redirect_uri: cfg.redirectUri,
+            code_verifier: verifier,
+          });
+          const res = await fetch(tokenUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            body: form.toString(),
+          });
+          if (!res.ok) {
+            let detail = '';
+            try { detail = await res.text(); } catch {}
+            console.error('Token exchange failed', { status: res.status, detail });
+            throw new Error('Token exchange failed');
+          }
+          const tok = await res.json();
+          const expires_at = tok.expires_in ? Date.now() + tok.expires_in * 1000 : undefined;
+          const tokens = { id_token: tok.id_token, access_token: tok.access_token, refresh_token: tok.refresh_token, expires_at };
+          localStorage.setItem('authTokens', JSON.stringify(tokens));
+          const payload = decodeJwtPayload<any>(tok.id_token);
+          if (payload) localStorage.setItem('mockUser', JSON.stringify({ id: payload.sub, email: payload.email, name: payload.name }));
+          setMsg('Signed in. Redirecting...');
+          setTimeout(() => navigate('/'), 600);
+          return;
+        } catch (e) {
+          console.error(e);
+          setMsg('Failed to complete sign-in. Returning...');
+          setTimeout(() => navigate('/'), 1200);
+          return;
+        }
+      }
+      setMsg('Auth not configured, returning home...');
+      setTimeout(() => navigate('/'), 800);
+    })();
   }, [navigate, params]);
 
   return (
