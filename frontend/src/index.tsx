@@ -8,6 +8,8 @@ import Home from './pages/Home';
 import CreateSession from './pages/CreateSession';
 import AuthCallback from './pages/AuthCallback';
 import { AuthProvider } from './auth/AuthContext';
+import Profile from './pages/Profile';
+import Info from './pages/Info';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -30,6 +32,8 @@ enableMocks().then(() => {
             <Route path="/" element={<Home />} />
             <Route path="/study" element={<App />} />
             <Route path="/create" element={<CreateSession />} />
+            <Route path="/profile" element={<Profile />} />
+            <Route path="/info" element={<Info />} />
             <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

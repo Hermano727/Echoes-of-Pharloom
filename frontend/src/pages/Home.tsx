@@ -41,7 +41,7 @@ const Home: React.FC = () => {
   return (
     <div className="relative w-screen h-screen overflow-hidden text-white bg-black font-trajan">
       <img
-        src="/assets/images/temp_home_bg.jpg"
+        src="/assets/images/home_bg.jpg"
         alt="Background"
         className="absolute inset-0 w-full h-full object-cover"
         onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}

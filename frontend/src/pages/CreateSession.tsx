@@ -129,7 +129,7 @@ const CreateSession: React.FC = () => {
   return (
     <div className="relative w-screen min-h-screen overflow-y-auto text-white bg-black font-trajan">
       <img
-        src="/assets/images/create_session_bg.jpg"
+        src="/assets/images/home_bg.jpg"
         alt="Background"
         className="absolute inset-0 w-full h-full object-cover opacity-65"
         onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
