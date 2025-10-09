@@ -904,7 +904,7 @@ className={`absolute left-1/2 -translate-x-1/2 top-[18%] md:top-[14%] lg:top-[12
             aria-label="Create Session"
             title="Create Session"
           >
-            <img src="/assets/ui/edit.png" alt="Create Session" className="w-6 h-6" />
+            <img src="/assets/ui/edit.svg" alt="Create Session" className="w-6 h-6" />
           </button>
         </div>
 
