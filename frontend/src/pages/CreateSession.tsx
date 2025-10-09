@@ -163,6 +163,14 @@ const CreateSession: React.FC = () => {
                   <label className="block text-xs opacity-80 mb-1">Number of segments</label>
                   <input type="number" className="w-full px-3 py-2 bg-black/50 text-white border border-white/25 rounded-md" value={segmentsCount} onChange={(e)=> setSegmentsCount(Math.max(1, Math.min(Object.keys(STUDY_AREAS).length, Number(e.target.value))))} />
                 </div>
+                <div className="col-span-2 text-xs opacity-80">
+                  Length per segment: {(() => {
+                    const totalSec = testMode ? Math.max(1, Math.floor(totalDuration)) : Math.max(60, Math.floor(totalDuration * 60));
+                    const n = Math.max(1, segmentsCount);
+                    const per = Math.floor(totalSec / n);
+                    return testMode ? `${per} s` : `${Math.floor(per/60)} min ${per%60 ? `${per%60}s` : ''}`;
+                  })()}
+                </div>
               </div>
             )}
           </div>

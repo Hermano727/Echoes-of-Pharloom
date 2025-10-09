@@ -61,6 +61,16 @@ export async function appendEvent(sessionId: string, type: string, data?: any): 
   return apiFetch(`/sessions/${sessionId}/events`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type, data }) }, false);
 }
 
+export async function getUploadUrl(contentType: string, key?: string): Promise<{ uploadUrl: string; key: string; publicUrl: string }>{
+  if (!API_BASE) throw new Error('API not configured');
+  return apiFetch('/profile/photo/uploadurl', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contentType, key }) }, false);
+}
+
+export async function sendFeedback(payload: { type: 'feedback' | 'bug'; name: string; email: string; message: string; company?: string }){
+  if (!API_BASE) return { ok: true }; // local/mock fallback
+  return apiFetch('/feedback', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }, true);
+}
+
 export async function getProfile(): Promise<{ name?: string; photoUrl?: string }> {
   if (!API_BASE) throw new Error('API not configured');
   return apiFetch('/profile', {}, false);

@@ -182,7 +182,8 @@ const App: React.FC = () => {
       normalized = { segments, breakDurationSec: plan.breakDurationSec ?? Math.floor((plan.breakDurationMin ?? 0) * 60) } as SessionPlan;
     }
     console.log('[init] plan', normalized);
-    lastPlanRef.current = plan;
+    lastPlanRef.current = normalized;
+    try { localStorage.setItem('activePlan', JSON.stringify(normalized)); } catch {}
     // Build segments from plan.segments or legacy
     let segments: { area: string; durationSec: number }[] = [];
     if (plan.segments && plan.segments.length > 0) {
@@ -616,11 +617,15 @@ const App: React.FC = () => {
   }, [timerState.isRunning, addToast]);
 
   const confirmReset = useCallback(() => {
-    // Re-initialize current plan to restart session to its beginning
-    if (lastPlanRef.current) {
-      initializeFromPlan(lastPlanRef.current);
+    // Re-initialize using remembered plan if available
+    let p: SessionPlan | null = lastPlanRef.current || null;
+    if (!p) {
+      try { const raw = localStorage.getItem('activePlan'); if (raw) p = JSON.parse(raw) as SessionPlan; } catch {}
+    }
+    if (p) {
+      initializeFromPlan(p);
     } else {
-      // minimal fallback: restart current selected area for current duration
+      // minimal fallback
       initializeFromPlan({ segments: [{ area: timerState.selectedAreaName, durationSec: timerState.timeLeft }], breakDurationSec: breakDurationRef.current } as SessionPlan);
     }
     audioManagerRef.current?.reset();

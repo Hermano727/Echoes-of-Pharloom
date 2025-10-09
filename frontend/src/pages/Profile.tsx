@@ -175,13 +175,26 @@ const Profile: React.FC = () => {
   };
 
   const onUpload = async (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result || '');
-      setPhoto(dataUrl);
-      try { localStorage.setItem('profilePhoto', dataUrl); } catch {}
-    };
-    reader.readAsDataURL(file);
+    try {
+      // 1) Ask backend for a pre-signed upload URL
+      const { getUploadUrl, updateProfile } = await import('../api');
+      const { uploadUrl, publicUrl } = await getUploadUrl(file.type || 'image/jpeg');
+      // 2) Upload to S3 using the URL
+      await fetch(uploadUrl, { method: 'PUT', headers: { 'content-type': file.type || 'image/jpeg' }, body: file });
+      // 3) Save URL to profile
+      await updateProfile({ photoUrl: publicUrl });
+      setPhoto(publicUrl);
+      try { localStorage.setItem('profilePhoto', publicUrl); } catch {}
+    } catch (e) {
+      // fallback: still preview locally
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || '');
+        setPhoto(dataUrl);
+        try { localStorage.setItem('profilePhoto', dataUrl); } catch {}
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   return (

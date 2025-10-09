@@ -10,6 +10,7 @@ import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { HttpApi, CorsPreflightOptions, CorsHttpMethod, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 
 export class EchoesInfraStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -157,6 +158,49 @@ export class EchoesInfraStack extends Stack {
     table.grantReadWriteData(createSessionFn);
     table.grantReadWriteData(appendEventFn);
 
+    // S3 bucket for profile photos
+    const photosBucket = new s3.Bucket(this, 'ProfilePhotos', {
+      removalPolicy: RemovalPolicy.DESTROY, // dev only
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      cors: [
+        {
+          allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET],
+          allowedOrigins: ['*'], // tighten for prod
+          allowedHeaders: ['*'],
+        },
+      ],
+    });
+
+    // Upload URL function
+    const getUploadUrlFn = new NodejsFunction(this, 'GetUploadUrlFn', {
+      entry: path.join(__dirname, '../../services/api/getUploadUrl.ts'),
+      runtime: Runtime.NODEJS_20_X,
+      memorySize: 256,
+      timeout: Duration.seconds(5),
+      bundling: { minify: true, target: 'es2020' },
+      environment: {
+        PHOTOS_BUCKET: photosBucket.bucketName,
+      },
+      logRetention: RetentionDays.ONE_WEEK,
+    });
+    photosBucket.grantPut(getUploadUrlFn);
+
+    // Feedback (Resend) function
+    const feedbackFn = new NodejsFunction(this, 'FeedbackFn', {
+      entry: path.join(__dirname, '../../services/api/feedback.ts'),
+      runtime: Runtime.NODEJS_20_X,
+      memorySize: 256,
+      timeout: Duration.seconds(7),
+      bundling: { minify: true, target: 'es2020' },
+      environment: {
+        RESEND_API_KEY: process.env.RESEND_API_KEY || '',
+        CONTACT_TO_EMAIL: process.env.CONTACT_TO_EMAIL || 'hh727w@gmail.com',
+        CONTACT_FROM_EMAIL: process.env.CONTACT_FROM_EMAIL || 'Echoes of Pharloom <onboarding@resend.dev>',
+      },
+      logRetention: RetentionDays.ONE_WEEK,
+    });
+
     // HTTP API with CORS for local dev
     const httpApi = new HttpApi(this, 'EchoesHttpApi', {
       corsPreflight: {
@@ -198,6 +242,21 @@ export class EchoesInfraStack extends Stack {
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration('AppendEventIntegration', appendEventFn),
       authorizer: jwtAuthorizer,
+    });
+
+    // Upload URL (protected)
+    httpApi.addRoutes({
+      path: '/profile/photo/uploadurl',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('UploadUrlIntegration', getUploadUrlFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    // Feedback (public)
+    httpApi.addRoutes({
+      path: '/feedback',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('FeedbackIntegration', feedbackFn),
     });
 
     // Stack outputs
