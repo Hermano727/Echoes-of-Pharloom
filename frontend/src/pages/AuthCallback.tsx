@@ -71,8 +71,26 @@ const AuthCallback: React.FC = () => {
           localStorage.setItem('authTokens', JSON.stringify(tokens));
           const payload = decodeJwtPayload<any>(tok.id_token);
           if (payload) localStorage.setItem('mockUser', JSON.stringify({ id: payload.sub, email: payload.email, name: payload.name }));
+          // Notify the app in the same tab so AuthProvider rehydrates immediately
+          try { window.dispatchEvent(new Event('authTokensUpdated')); } catch {}
           setMsg('Signed in. Redirecting...');
-          setTimeout(() => navigate('/'), 600);
+          // Redirect back to the page the user initiated sign-in from
+          try {
+            const ret = sessionStorage.getItem('post_login_redirect');
+            if (ret) sessionStorage.removeItem('post_login_redirect');
+            let target = '/';
+            if (ret) {
+              try {
+                const u = new URL(ret, window.location.origin);
+                if (u.origin === window.location.origin) {
+                  target = `${u.pathname}${u.search}${u.hash}`;
+                }
+              } catch {}
+            }
+            setTimeout(() => navigate(target, { replace: true }), 250);
+          } catch {
+            setTimeout(() => navigate('/'), 400);
+          }
           return;
         } catch (e) {
           console.error(e);

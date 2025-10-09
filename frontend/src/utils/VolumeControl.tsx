@@ -49,8 +49,9 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
 
   const volumePercentage = Math.round(volume * 100);
 
+  // Use CSS variable for track fill so it applies to ::-webkit-slider-runnable-track and ::-moz-range-track
   const sliderStyle: React.CSSProperties = useMemo(() => ({
-    background: `linear-gradient(to right, #e5dfd3 0%, #e5dfd3 ${volumePercentage}%, rgba(229, 231, 235, 0.4) ${volumePercentage}%, rgba(229, 231, 235, 0.4) 100%)`,
+    ['--fill' as any]: `${volumePercentage}%`,
   }), [volumePercentage]);
 
   const vertical = orientation === 'vertical';
@@ -80,20 +81,46 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
   return (
     <>
       <style>{`
+        @keyframes vc-fade {
+          from { opacity: 0; transform: translateY(6px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
         .volume-slider {
           -webkit-appearance: none;
           appearance: none;
-          height: 8px;
-          border-radius: 6px;
+          height: 14px; /* fallback for engines that honor element height */
+          border-radius: 8px;
           outline: none;
+          background: transparent; /* track background set on runnable track */
           transition: all 0.2s ease;
+        }
+        /* WebKit/Blink track */
+        .volume-slider::-webkit-slider-runnable-track {
+          height: 14px;
+          border-radius: 8px;
+          background: linear-gradient(to right,
+            #e5dfd3 0%,
+            #e5dfd3 var(--fill, 50%),
+            rgba(229,231,235,0.4) var(--fill, 50%),
+            rgba(229,231,235,0.4) 100%);
+        }
+        /* Gecko track */
+        .volume-slider::-moz-range-track {
+          height: 14px;
+          border-radius: 8px;
+          background: linear-gradient(to right,
+            #e5dfd3 0%,
+            #e5dfd3 var(--fill, 50%),
+            rgba(229,231,235,0.4) var(--fill, 50%),
+            rgba(229,231,235,0.4) 100%);
         }
         
         .volume-slider::-webkit-slider-thumb {
           -webkit-appearance: none;
           appearance: none;
-          height: 18px;
-          width: 18px;
+          height: 22px;
+          width: 22px;
+          margin-top: -4px; /* visually center on taller track */
           border-radius: 50%;
           background: #d6d3d1;
           cursor: pointer;
@@ -103,13 +130,13 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
         
         .volume-slider::-webkit-slider-thumb:hover {
           background: #e7e2dc;
-          transform: scale(1.07);
+          transform: scale(1.06);
           box-shadow: 0 3px 6px rgba(0,0,0,0.4);
         }
         
         .volume-slider::-moz-range-thumb {
-          height: 18px;
-          width: 18px;
+          height: 22px;
+          width: 22px;
           border-radius: 50%;
           background: #d6d3d1;
           cursor: pointer;
@@ -120,7 +147,7 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
         
         .volume-slider::-moz-range-thumb:hover {
           background: #e7e2dc;
-          transform: scale(1.07);
+          transform: scale(1.06);
           box-shadow: 0 3px 6px rgba(0,0,0,0.4);
         }
         
@@ -143,7 +170,7 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
           'volume-control relative',
           vertical ? 'flex flex-col items-center' : 'flex items-center space-x-3',
           compact ? 'bg-black/40 rounded-full backdrop-blur-sm' : 'p-3 bg-gray-50 rounded-lg shadow-sm',
-          vertical ? 'w-auto' : 'min-w-[12rem] w-full',
+          vertical ? 'w-auto px-2 py-2' : 'min-w-[12rem] w-full',
           'group'
         ].join(' ')}
         onMouseEnter={() => setAnchorHoverSafe(true)}
@@ -151,7 +178,7 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
       >
         {/* Slider */}
         {vertical && (!revealOnHover || anchorHover) && placement === 'inline' && (
-          <div className='flex items-center justify-center w-9 h-44 pt-2 pb-1'>
+          <div className='relative flex items-center justify-center w-9 h-44'>
             <input
               type="range"
               min="0"
@@ -160,11 +187,8 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
               value={volume}
               onChange={handleVolumeChange}
               disabled={disabled}
-              className={[
-                'volume-slider cursor-pointer',
-                vertical ? 'w-44 rotate-[-90deg]' : 'w-full',
-              ].join(' ')}
-              style={sliderStyle}
+              className='volume-slider cursor-pointer absolute'
+              style={{ ...(sliderStyle as any), width: '176px', left: '50%', top: '50%', transform: 'translate(-50%, -50%) rotate(-90deg)' }}
               aria-label="Volume"
             />
           </div>
@@ -172,22 +196,25 @@ const VolumeControl: React.FC<VolumeControlProps> = ({
 
         {vertical && revealOnHover && placement === 'popover' && visible && (
           <div
-            className='absolute bottom-full right-0 mb-2 w-10 h-48 bg-black/55 rounded-full backdrop-blur-sm shadow-lg flex items-center justify-center pointer-events-auto z-30'
+            className='absolute bottom-full right-0 mb-2 w-12 h-56 bg-black/55 rounded-full backdrop-blur-sm shadow-lg flex items-center justify-center pointer-events-auto z-30'
             onMouseEnter={() => setPopoverHover(true)}
             onMouseLeave={() => setPopoverHover(false)}
+            style={{ animation: 'vc-fade 180ms ease-out' }}
           >
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={volume}
-              onChange={handleVolumeChange}
-              disabled={disabled}
-              className='volume-slider cursor-pointer w-44 rotate-[-90deg]'
-              style={sliderStyle}
-              aria-label="Volume"
-            />
+            <div className='relative w-12 h-56'>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={volume}
+                onChange={handleVolumeChange}
+                disabled={disabled}
+                className='volume-slider cursor-pointer absolute'
+                style={{ ...(sliderStyle as any), width: '224px', left: '50%', top: '50%', transform: 'translate(-50%, -50%) rotate(-90deg)' }}
+                aria-label="Volume"
+              />
+            </div>
           </div>
         )}
 

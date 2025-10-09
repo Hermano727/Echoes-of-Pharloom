@@ -6,8 +6,11 @@ import { STUDY_AREAS, getAreaByName } from "./config/areas";
 import { AudioManager, AudioState } from "./utils/audioManager";
 import { VideoManager, VideoState } from "./utils/videoManager";
 import { DEFAULT_TIMER_CONFIG, formatTime } from "./utils/timerUtils";
-import { startSession, appendEvent, completeSession } from './local/data';
+import { startSession, appendEvent as appendLocalEvent, completeSession } from './local/data';
 import type { SessionPlan } from './local/data';
+import { API_BASE } from './config/api';
+import { useAuth } from './auth/AuthContext';
+import FeedbackModal from './components/FeedbackModal';
 
 
 interface TimerState {
@@ -131,11 +134,13 @@ const App: React.FC = () => {
     isLoaded: false,
     isPlaying: false,
     error: null,
-    volume: 0.7,
+    volume: 0.05, // actual output volume
     currentTime: 0,
     duration: 0,
   });
-  const lastNonZeroVolumeRef = useRef<number>(0.7);
+  // UI volume separate from actual output (we apply a 0.5 gain curve)
+  const [uiVolume, setUiVolume] = useState<number>(0.1); // 10% UI -> 5% output
+  const lastNonZeroVolumeRef = useRef<number>(0.1);
 
   const [videoState, setVideoState] = useState<VideoState>({
     isLoaded: false,
@@ -145,6 +150,8 @@ const App: React.FC = () => {
   
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showDebugInfo, setShowDebugInfo] = useState(false);
+  const { isAuthenticated, signIn, user } = useAuth();
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [showUi, setShowUi] = useState(true);
   const hideTimeoutRef = useRef<number | null>(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -230,11 +237,13 @@ const App: React.FC = () => {
   useEffect(() => {
     if (audioRef.current && !audioManagerRef.current) {
       audioManagerRef.current = new AudioManager(audioRef.current, setAudioState);
+      // apply initial UI volume mapping to actual output
+      try { audioManagerRef.current.setVolume(uiVolume * 0.5); } catch {}
     }
     if (videoRef.current && !videoManagerRef.current) {
       videoManagerRef.current = new VideoManager(videoRef.current, setVideoState);
     }
-  }, []);
+  }, [uiVolume]);
 
   // Apply session plan from localStorage if present
   const didInitRef = useRef(false);
@@ -275,6 +284,7 @@ const App: React.FC = () => {
     };
   }, []);
 
+
   useEffect(() => {
     const currentArea = getAreaByName(timerState.selectedAreaName);
     if (currentArea) {
@@ -304,7 +314,7 @@ const App: React.FC = () => {
                   videoManagerRef.current?.pause();
                   setPhase('break');
                   setBreakRemaining(breakDurationRef.current);
-                  try { if (sessionIdRef.current) appendEvent(sessionIdRef.current, { type: 'BreakReached', ts: Date.now() }); } catch {}
+                  try { if (sessionIdRef.current) appendLocalEvent(sessionIdRef.current, { type: 'BreakReached', ts: Date.now() }); } catch {}
                   try { new Audio('/assets/sounds/break_start.mp3').play().catch(() => {}); } catch {}
                   // Keep isRunning=true so break autoplay countdown proceeds
                   setTimerState(p => ({ ...p, isRunning: true, timeLeft: breakDurationRef.current }));
@@ -330,12 +340,15 @@ const App: React.FC = () => {
               } else {
                 console.log('[complete]');
                 if (intervalRef.current) clearInterval(intervalRef.current);
-                try { if (sessionIdRef.current) { completeSession(sessionIdRef.current, true); sessionIdRef.current = null; } } catch {}
+                try { if (sessionIdRef.current) { completeSession(sessionIdRef.current, true); } } catch {}
+                try { sendEvent('Completed').catch(() => {}); } catch {}
+                sessionIdRef.current = null;
                 audioManagerRef.current?.pause();
                 videoManagerRef.current?.pause();
                 try { new Audio('/assets/sounds/session_complete.mp3').play().catch(() => {}); } catch {}
                 setPhase('completed');
-                addToast('Session completed');
+                setCompleteBanner(true);
+                setTimeout(() => setCompleteBanner(false), 1800);
                 setTimerState(p => ({ ...p, timeLeft: 0, isRunning: false }));
                 return 0;
               }
@@ -387,27 +400,96 @@ const App: React.FC = () => {
   }, []);
 
   // Session/event engine wiring
-  const sessionIdRef = useRef<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null); // local-only session id
+  const backendSessionIdRef = useRef<string | null>(null);
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
+  const [completeBanner, setCompleteBanner] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackType, setFeedbackType] = useState<'feedback' | 'bug' | null>(null);
   const addToast = useCallback((text: string) => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
     setToasts(t => [...t, { id, text }]);
     window.setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 2400);
   }, []);
 
-  const onStart = useCallback(() => {
+  const waitForIdToken = useCallback(async (timeoutMs = 1500): Promise<string | null> => {
+    const start = Date.now();
+    const read = () => {
+      try {
+        const raw = localStorage.getItem('authTokens');
+        if (!raw) return null;
+        const t = JSON.parse(raw);
+        return t?.id_token || null;
+      } catch { return null; }
+    };
+    let tok = read();
+    while (!tok && Date.now() - start < timeoutMs) {
+      await new Promise(r => setTimeout(r, 150));
+      tok = read();
+    }
+    return tok;
+  }, []);
+
+  const ensureBackendSession = useCallback(async (plan: SessionPlan) => {
+    if (!API_BASE) return null;
+    if (backendSessionIdRef.current) return backendSessionIdRef.current;
+    // pick up any pre-created session id from Create page
+    try {
+      const cached = localStorage.getItem('currentSessionId');
+      if (cached) {
+        backendSessionIdRef.current = cached;
+        return cached;
+      }
+    } catch {}
+    const tok = await waitForIdToken();
+    if (!tok) return null;
+    try {
+      const api = await import('./api');
+      const res = await api.createSession(plan);
+      if (res?.sessionId) {
+        backendSessionIdRef.current = res.sessionId;
+        try { localStorage.setItem('currentSessionId', res.sessionId); } catch {}
+        return res.sessionId;
+      }
+    } catch (e) {
+      console.warn('Failed to create backend session', e);
+    }
+    return null;
+  }, [waitForIdToken]);
+
+  const sendEvent = useCallback(async (type: string, data?: any) => {
+    try {
+      if (sessionIdRef.current) appendLocalEvent(sessionIdRef.current, { type: type as any, ts: Date.now() });
+    } catch {}
+    if (!API_BASE) return;
+    // try send to backend
+    try {
+      const tok = await waitForIdToken();
+      if (!tok) return;
+      const backendId = backendSessionIdRef.current || undefined;
+      if (!backendId) return;
+      const api = await import('./api');
+      await api.appendEvent(backendId, type, data);
+    } catch (e) {
+      console.warn('appendEvent (backend) failed', e);
+    }
+  }, [waitForIdToken]);
+
+  const onStart = useCallback(async () => {
     // If session previously completed, fully re-initialize from last plan
     if (phase === 'completed' && lastPlanRef.current) {
       initializeFromPlan(lastPlanRef.current);
       // reset media to ensure fresh start
       audioManagerRef.current?.reset();
       videoManagerRef.current?.reset();
-      setTimeout(() => {
+      setTimeout(async () => {
         // new local session
         try {
           const { sessionId } = startSession(lastPlanRef.current!);
           sessionIdRef.current = sessionId;
         } catch {}
+        // ensure backend session too if possible
+        try { await ensureBackendSession(lastPlanRef.current!); } catch {}
         setTimerState(prev => ({ ...prev, isRunning: true }));
         audioManagerRef.current?.play().catch(() => {});
         videoManagerRef.current?.play().catch(() => {});
@@ -428,9 +510,17 @@ const App: React.FC = () => {
           if (!lastPlanRef.current) initializeFromPlan(plan);
           const { sessionId } = startSession(plan);
           sessionIdRef.current = sessionId;
+          // ensure backend session too if possible
+          try { await ensureBackendSession(plan); } catch {}
         } catch (e) {
           console.warn('Failed to start local session', e);
         }
+      } else {
+        // session already exists locally, still ensure backend
+        try {
+          const plan: SessionPlan = lastPlanRef.current ?? { segments: segmentsRef.current.map(s => ({ area: s.area, durationSec: s.durationSec })), breakDurationSec: breakDurationRef.current } as SessionPlan;
+          await ensureBackendSession(plan);
+        } catch {}
       }
     }
 
@@ -441,7 +531,21 @@ const App: React.FC = () => {
       videoManagerRef.current?.play().catch(e => console.error("Video play error:", e));
     }, 150);
     triggerActionOverlay('play');
-  }, [phase, initializeFromPlan, triggerActionOverlay, timerState.timeLeft, timerState.selectedAreaName]);
+  }, [phase, initializeFromPlan, triggerActionOverlay, timerState.timeLeft, timerState.selectedAreaName, ensureBackendSession]);
+
+  // Auto-start if coming from Quick Start or Create with a fresh plan
+  const didAutoStartRef = useRef(false);
+  useEffect(() => {
+    if (didAutoStartRef.current) return;
+    try {
+      const auto = localStorage.getItem('autostart');
+      if (auto && (lastPlanRef.current || (segmentsRef.current && segmentsRef.current.length > 0))) {
+        didAutoStartRef.current = true;
+        localStorage.removeItem('autostart');
+        setTimeout(() => { onStart(); }, 200);
+      }
+    } catch {}
+  }, [onStart]);
 
   const onPause = useCallback(() => {
     setTimerState(prevState => ({ ...prevState, isRunning: false }));
@@ -494,9 +598,10 @@ const App: React.FC = () => {
       if (!timerState.isRunning) return;
       try {
         if (sessionIdRef.current) {
-          appendEvent(sessionIdRef.current, { type: 'FocusLost', ts: Date.now() });
+          appendLocalEvent(sessionIdRef.current, { type: 'FocusLost', ts: Date.now() });
         }
       } catch {}
+      try { sendEvent('FocusLost'); } catch {}
       addToast('Focus lost detected');
     };
     const onVisibility = () => {
@@ -533,17 +638,17 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const onVolumeChange = useCallback((newVolume: number) => {
-    setAudioState(prev => ({ ...prev, volume: newVolume }));
-    audioManagerRef.current?.setVolume(newVolume);
+  const onVolumeChange = useCallback((newUiVolume: number) => {
+    setUiVolume(newUiVolume);
+    audioManagerRef.current?.setVolume(Math.max(0, Math.min(1, newUiVolume * 0.5)));
   }, []);
 
-  // keep track of last non-zero volume
+  // keep track of last non-zero UI volume
   useEffect(() => {
-    if (audioState.volume > 0) {
-      lastNonZeroVolumeRef.current = audioState.volume;
+    if (uiVolume > 0) {
+      lastNonZeroVolumeRef.current = uiVolume;
     }
-  }, [audioState.volume]);
+  }, [uiVolume]);
 
 
   const onToggleCollapse = useCallback(() => {
@@ -590,8 +695,8 @@ const App: React.FC = () => {
         return; // avoid interfering with typing
       }
       const key = e.key.toLowerCase();
-      const inc = () => onVolumeChange(Math.min(1, audioState.volume + 0.05));
-      const dec = () => onVolumeChange(Math.max(0, audioState.volume - 0.05));
+      const inc = () => onVolumeChange(Math.min(1, uiVolume + 0.05));
+      const dec = () => onVolumeChange(Math.max(0, uiVolume - 0.05));
 
       if (key === 'k' || key === ' ') {
         e.preventDefault();
@@ -601,7 +706,7 @@ const App: React.FC = () => {
         onToggleCollapse();
       } else if (key === 'm') {
         e.preventDefault();
-        if (audioState.volume === 0) {
+        if (uiVolume === 0) {
           onVolumeChange(Math.max(0.1, lastNonZeroVolumeRef.current));
         } else {
           onVolumeChange(0);
@@ -621,6 +726,11 @@ const App: React.FC = () => {
       } else if (key === '?') {
         e.preventDefault();
         setShowHelp(prev => !prev);
+      } else if (key === 'escape') {
+        if (showHelp) {
+          e.preventDefault();
+          setShowHelp(false);
+        }
       }
     };
 
@@ -642,7 +752,7 @@ const App: React.FC = () => {
   return (
       <div
         ref={rootRef}
-        className="relative w-screen h-screen overflow-hidden text-white bg-black font-trajan"
+        className="relative w-screen h-[100dvh] overflow-hidden text-white bg-black font-trajan"
         onMouseMove={() => {
         if (!isCollapsed) return;
         setShowUi(true);
@@ -657,6 +767,9 @@ const App: React.FC = () => {
         className="absolute inset-0 w-full h-full object-cover"
         style={{ objectFit: 'cover' }}
       />
+      {/* Top-left mask to cover game HUD (health bar) area */}
+      <div className="absolute top-0 left-0 z-10 pointer-events-none" style={{ width: '280px', height: '120px', background: 'linear-gradient(90deg, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0.4) 60%, rgba(0,0,0,0) 100%)' }} />
+
       {/* Center action overlay (YouTube-like) */}
       {showActionOverlay && actionOverlay && (
         <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none transition-opacity duration-300">
@@ -686,7 +799,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Toasts */}
+      {/* Toasts (focus lost) */}
       {toasts.length > 0 && (
         <div className="absolute top-4 right-4 z-30 space-y-2">
           {toasts.map(t => (
@@ -694,6 +807,15 @@ const App: React.FC = () => {
               {t.text}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Center completion banner */}
+      {completeBanner && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
+          <div className="px-6 py-3 rounded-full bg-black/50 border border-white/30 text-white text-2xl tracking-wider font-trajan">
+            Session Completed
+          </div>
         </div>
       )}
 
@@ -733,7 +855,7 @@ className={`absolute left-1/2 -translate-x-1/2 top-[18%] md:top-[14%] lg:top-[12
             {phase === 'break' ? formatTime(breakRemaining) : formatTime(timerState.timeLeft)}
           </p>
         </div>
-        
+        {/* Revert: show overlay credits and a separate bottom controls bar */}
         {( !isCollapsed || showUi ) && (
           <BottomCredits areaName={timerState.selectedAreaName} />
         )}
@@ -741,56 +863,73 @@ className={`absolute left-1/2 -translate-x-1/2 top-[18%] md:top-[14%] lg:top-[12
         {( !isCollapsed || showUi ) && (
           <div className="absolute bottom-0 w-full p-4">
             <TimerControls
-              isRunning={timerState.isRunning}
-              onStart={onStart}
-              onPause={onPause}
-              onReset={onReset}
-              canStart={audioState.isLoaded}
-              isCollapsed={isCollapsed}
-              onToggleCollapse={onToggleCollapse}
-              currentAreaName={timerState.selectedAreaName}
-              volume={audioState.volume}
-              onVolumeChange={onVolumeChange}
-              volumeEnabled={audioState.isLoaded}
-              onVolumeAction={(a) => triggerActionOverlay(a === 'mute' ? 'mute' : 'unmute')}
-            />
+            isRunning={timerState.isRunning}
+            onStart={onStart}
+            onPause={onPause}
+            onReset={onReset}
+            canStart={audioState.isLoaded}
+            isCollapsed={isCollapsed}
+            onToggleCollapse={onToggleCollapse}
+            currentAreaName={timerState.selectedAreaName}
+            volume={uiVolume}
+            onVolumeChange={onVolumeChange}
+            volumeEnabled={audioState.isLoaded}
+            onVolumeAction={(a) => triggerActionOverlay(a === 'mute' ? 'mute' : 'unmute')}
+            leftExtra={(
+              <div className="flex items-center gap-3">
+                <button onClick={() => { setFeedbackType('feedback'); setFeedbackOpen(true); }} className="opacity-85 hover:opacity-100 underline underline-offset-2">Feedback</button>
+                <button onClick={() => { setFeedbackType('bug'); setFeedbackOpen(true); }} className="opacity-85 hover:opacity-100 underline underline-offset-2">Report a bug</button>
+              </div>
+            )}
+          />
           </div>
         )}
 
+        <FeedbackModal open={feedbackOpen} type={feedbackType} onClose={() => setFeedbackOpen(false)} />
 
-        {( !isCollapsed || showUi ) && (
-          <>
-            {/* Top-left quick actions */}
-            <div className="absolute top-4 left-4 z-20 flex gap-2">
+
+        {/* Top-left quick actions */}
+        <div className="absolute top-4 left-4 z-20 flex gap-2">
+          <button
+            onClick={() => navigate('/')}
+            className="p-2 text-white rounded-full bg-white/20 hover:bg-white/40 transition-colors"
+            aria-label="Go Home"
+            title="Home"
+          >
+            <img src="/assets/ui/home.svg" alt="Home" className="w-6 h-6" />
+          </button>
+          <button
+            onClick={() => navigate('/create')}
+            className="p-2 text-white rounded-full bg-white/20 hover:bg-white/40 transition-colors"
+            aria-label="Create Session"
+            title="Create Session"
+          >
+            <img src="/assets/ui/edit.png" alt="Create Session" className="w-6 h-6" />
+          </button>
+        </div>
+
+        {/* Profile top-right (account) */}
+        <div className="absolute top-4 right-4 z-20">
+          {isAuthenticated ? (
+            <div className="relative">
               <button
-                onClick={() => navigate('/')}
-                className="p-2 text-white rounded-full bg-white/20 hover:bg-white/40 transition-colors"
-                aria-label="Go Home"
-                title="Home"
+                onClick={() => setProfileMenuOpen(v => !v)}
+                className="flex items-center gap-2 px-2 py-1 rounded-full bg-white/20 hover:bg-white/35 transition-colors"
+                aria-label="Account"
+                title="Account"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7"/><path d="M9 22V12h6v10"/></svg>
+                {(() => { try { const p = localStorage.getItem('profilePhoto'); if (p) return <img src={p} alt="Avatar" className="w-7 h-7 rounded-full object-cover" /> } catch {} return <div className="w-7 h-7 rounded-full bg-white/30 text-black flex items-center justify-center text-sm">{(user?.name||user?.email||'U').slice(0,1).toUpperCase()}</div>; })()}
               </button>
-              <button
-                onClick={() => navigate('/create')}
-                className="p-2 text-white rounded-full bg-white/20 hover:bg-white/40 transition-colors"
-                aria-label="Create Session"
-                title="Create Session"
-              >
-                <img src="/assets/ui/edit.svg" alt="Create Session" className="w-6 h-6" />
-              </button>
+              {profileMenuOpen && (
+                <div className="absolute right-0 mt-2 w-48 rounded-lg bg-black/80 border border-white/15 shadow-lg overflow-hidden">
+<button onClick={() => { onPause(); try { localStorage.setItem('resumeStudy','1'); } catch {}; navigate('/profile', { state: { fromStudy: true } }); setProfileMenuOpen(false); }} className="block w-full text-left px-4 py-2 hover:bg-white/10">My profile</button>
+                </div>
+              )}
             </div>
-
-            {/* Debug toggle (top-right) */}
-            <button
-              onClick={onToggleDebugInfo}
-              className={`absolute top-4 right-4 z-20 p-2 text-white rounded-full transition-colors ${showDebugInfo ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-white/20 hover:bg-white/40'}`}
-              aria-label="Toggle Debug Info"
-              title="Toggle Debug Info"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bug"><path d="M10 20h4"/><path d="M10 20a5 5 0 0 1-5-5V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a5 5 0 0 1-5 5Z"/><path d="M13 10h-2"/><path d="M12 17v-4"/><path d="M20 7l-4.2 4.2"/><path d="M4 7l4.2 4.2"/></svg>
-            </button>
-          </>
-        )}
+          ) : (
+            <button onClick={signIn} className="px-4 py-2 rounded-full bg-white/20 hover:bg-white/35 transition-colors">Sign in</button>
+          )}
+        </div>
       </div>
 
       <audio
@@ -798,6 +937,7 @@ className={`absolute left-1/2 -translate-x-1/2 top-[18%] md:top-[14%] lg:top-[12
         loop
         preload="auto"
       />
+
 
       {/* Shortcuts help overlay */}
       {showHelp && (
@@ -843,7 +983,7 @@ className={`absolute left-1/2 -translate-x-1/2 top-[18%] md:top-[14%] lg:top-[12
           <p>Timer Running: {timerState.isRunning ? 'Yes' : 'No'}</p>
           <p>Audio Duration: {audioState.duration ? `${audioState.duration.toFixed(1)}s` : 'Unknown'}</p>
           <p>Audio Current Time: {audioState.currentTime.toFixed(1)}s</p>
-          <p>Volume: {Math.round(audioState.volume * 100)}%</p>
+          <p>Volume (UI): {Math.round(uiVolume * 100)}%</p>
           <p>Video Source: {getAreaByName(timerState.selectedAreaName)?.videoPath}</p>
           <p>Video Loaded: {videoState.isLoaded ? 'Yes' : 'No'}</p>
           <p>Video Playing: {videoState.isPlaying ? 'Yes' : 'No'}</p>

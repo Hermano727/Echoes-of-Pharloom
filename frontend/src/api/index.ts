@@ -60,3 +60,13 @@ export async function appendEvent(sessionId: string, type: string, data?: any): 
   if (!API_BASE) throw new Error('API not configured');
   return apiFetch(`/sessions/${sessionId}/events`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type, data }) }, false);
 }
+
+export async function getProfile(): Promise<{ name?: string; photoUrl?: string }> {
+  if (!API_BASE) throw new Error('API not configured');
+  return apiFetch('/profile', {}, false);
+}
+
+export async function updateProfile(patch: { name?: string; photoUrl?: string }): Promise<void> {
+  if (!API_BASE) throw new Error('API not configured');
+  await apiFetch('/profile', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }, false);
+}

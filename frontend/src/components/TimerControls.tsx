@@ -15,6 +15,7 @@ interface TimerControlsProps {
   onVolumeChange: (v: number) => void;
   volumeEnabled: boolean;
   onVolumeAction: (a: 'mute' | 'unmute') => void;
+  leftExtra?: React.ReactNode; // content to render to the right of Reset button
 }
 
 const TimerControls: React.FC<TimerControlsProps> = ({
@@ -30,11 +31,12 @@ const TimerControls: React.FC<TimerControlsProps> = ({
   onVolumeChange,
   volumeEnabled,
   onVolumeAction,
+  leftExtra,
 }) => {
   const displayName = STUDY_AREAS[currentAreaName]?.displayName ?? currentAreaName;
   return (
     <div className="w-full p-4 flex justify-between items-center pointer-events-auto bg-gradient-to-t from-black via-transparent to-transparent">
-      <div className="flex items-center space-x-2">
+      <div className="flex items-center space-x-3">
         {isRunning ? (
           <button 
             onClick={onPause}
@@ -63,6 +65,11 @@ const TimerControls: React.FC<TimerControlsProps> = ({
         >
           <img src="/assets/ui/reset.png" alt="Reset" className="w-6 h-6" />
         </button>
+        {leftExtra && (
+          <div className="ml-2 pl-2 border-l border-white/15 flex items-center gap-3 text-sm">
+            {leftExtra}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center space-x-4">

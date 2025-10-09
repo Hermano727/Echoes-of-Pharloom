@@ -47,27 +47,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<AuthUser | null>(null);
   const [tokens, setTokens] = useState<AuthTokens | null>(null);
 
-  // Initialize from stored tokens or mock user
+  // Initialize from stored tokens or mock user, and listen for runtime updates
   useEffect(() => {
-    try {
-      const rawTok = localStorage.getItem(TOKENS_KEY);
-      if (rawTok) {
-        const t: AuthTokens = JSON.parse(rawTok);
-        if (t.id_token) {
-          const payload = decodeJwtPayload<any>(t.id_token);
-          if (payload && (!t.expires_at || Date.now() < t.expires_at)) {
-            setTokens(t);
-            setUser({ id: payload.sub, email: payload.email, name: payload.name });
-            return;
+    const refreshFromStorage = () => {
+      try {
+        const rawTok = localStorage.getItem(TOKENS_KEY);
+        if (rawTok) {
+          const t: AuthTokens = JSON.parse(rawTok);
+          if (t.id_token) {
+            const payload = decodeJwtPayload<any>(t.id_token);
+            if (payload && (!t.expires_at || Date.now() < t.expires_at)) {
+              setTokens(t);
+              setUser({ id: payload.sub, email: payload.email, name: payload.name });
+              return;
+            }
           }
         }
-      }
-      const rawMock = localStorage.getItem(MOCK_USER_KEY);
-      if (rawMock) setUser(JSON.parse(rawMock));
-    } catch {}
+        const rawMock = localStorage.getItem(MOCK_USER_KEY);
+        if (rawMock) setUser(JSON.parse(rawMock));
+      } catch {}
+    };
+
+    refreshFromStorage();
+    const onAuthUpdated = () => refreshFromStorage();
+    window.addEventListener('authTokensUpdated', onAuthUpdated as any);
+    return () => window.removeEventListener('authTokensUpdated', onAuthUpdated as any);
   }, []);
 
   const signIn = useCallback(async () => {
+    // Persist return location to restore after hosted UI redirect
+    try {
+      sessionStorage.setItem('post_login_redirect', window.location.href);
+      // If user is on /study and the timer was running, request autostart on return
+      if (window.location.pathname.startsWith('/study')) {
+        try {
+          const raw = localStorage.getItem('studyTimerState');
+          if (raw) {
+            const st = JSON.parse(raw);
+            if (st && st.isRunning) localStorage.setItem('autostart', '1');
+          }
+        } catch {}
+      }
+    } catch {}
+
     const cognito = isCognitoConfigured();
     if (!cognito) {
       const mock: AuthUser = { id: 'mock-user', name: 'Echoes Dev', email: 'echoes@example.com' };

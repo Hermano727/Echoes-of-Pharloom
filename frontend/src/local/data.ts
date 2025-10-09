@@ -113,47 +113,58 @@ function dayMinus(d: Date, days: number): Date {
 
 export function computeStreaks(): { daily: number; focus: number; noDeath: number } {
   const sessions = readAll();
+  // Daily streak uses completed sessions only (no time minimum). Focus can be based on reaching break.
   const completed = sessions.filter(s => s.completed && s.completedAt);
-  if (completed.length === 0) return { daily: 0, focus: 0, noDeath: 0 };
-
-  // Daily streak: consecutive days ending today (or most recent day with a completion)
-  const byDay = new Map<string, StoredSession[]>();
+  // Build day-key map with epoch midnight keys to avoid parsing issues
+  const byDay = new Map<number, number>();
   for (const s of completed) {
     const d = new Date(s.completedAt!);
-    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-    if (!byDay.has(key)) byDay.set(key, []);
-    byDay.get(key)!.push(s);
+    const k = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    byDay.set(k, (byDay.get(k) || 0) + 1);
   }
-  const today = new Date(); today.setHours(0,0,0,0);
-  // find the most recent day with a completion (could be today or past)
-  const daysKeys = Array.from(byDay.keys()).sort((a,b) => new Date(b).getTime() - new Date(a).getTime());
-  const mostRecentDate = daysKeys.length > 0 ? new Date(daysKeys[0]) : today;
-  let streak = 0;
-  let cursor = new Date(mostRecentDate);
-  while (true) {
-    const key = `${cursor.getFullYear()}-${cursor.getMonth()}-${cursor.getDate()}`;
-    if (byDay.has(key)) {
-      streak += 1;
-      cursor = dayMinus(cursor, 1);
-    } else {
-      break;
+  let daily = 0;
+  if (byDay.size > 0) {
+    const today = new Date();
+    const todayKey = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    // Find most recent day key with completions (could be today or earlier)
+    const keys = Array.from(byDay.keys()).sort((a, b) => b - a);
+    let cursor = keys[0];
+    while (byDay.has(cursor)) {
+      daily += 1;
+      cursor = cursor - 24 * 60 * 60 * 1000;
     }
   }
 
-  // Focus streak: consecutive completed sessions (most recent backwards) with zero FocusLost events
-  const sortedCompleted = completed.slice().sort((a,b) => (b.completedAt! - a.completedAt!));
-  let focusStreak = 0;
-  for (const s of sortedCompleted) {
+  // Focus streak: consecutive sessions (most recent backwards) where:
+  // - Either BreakReached occurred, or session completed, and
+  // - No FocusLost occurred.
+  // Sort by the most relevant timestamp: BreakReached ts if present, otherwise completedAt.
+  type WithFocusKey = { keyTs: number; s: StoredSession };
+  const withFocusCandidates: WithFocusKey[] = sessions
+    .map(s => {
+      const breakEvt = s.events.slice().reverse().find(e => e.type === 'BreakReached');
+      const keyTs = breakEvt?.ts || s.completedAt || 0;
+      return { keyTs, s } as WithFocusKey;
+    })
+    .filter(x => x.keyTs > 0)
+    .sort((a, b) => b.keyTs - a.keyTs);
+
+  let focus = 0;
+  for (const { s } of withFocusCandidates) {
     const lost = s.events.some(e => e.type === 'FocusLost');
-    if (!lost) focusStreak += 1; else break;
+    if (!lost) focus += 1; else break;
   }
 
-  // No-death streak: consecutive completed sessions without 'Died' event (currently same as focus if we never emit Died)
-  let noDeathStreak = 0;
-  for (const s of sortedCompleted) {
+  // No-death streak: consecutive sessions without 'Died' event, ordered by completedAt (fall back to startedAt)
+  const completedOrRecent = sessions
+    .map(s => ({ ts: s.completedAt || s.startedAt, s }))
+    .sort((a, b) => b.ts - a.ts)
+    .map(x => x.s);
+  let noDeath = 0;
+  for (const s of completedOrRecent) {
     const died = s.events.some(e => e.type === 'Died');
-    if (!died) noDeathStreak += 1; else break;
+    if (!died) noDeath += 1; else break;
   }
 
-  return { daily: streak, focus: focusStreak, noDeath: noDeathStreak };
+  return { daily, focus, noDeath };
 }

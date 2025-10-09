@@ -121,9 +121,25 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     // For now, noDeath mirrors focus unless we start emitting Died
     noDeath = focus; // or recompute similarly using hadDied if you start sending Died events
 
-    const payload: HomeSummary = {
+    // Count total sessions for this user (paginated)
+    let totalSessions = 0;
+    let lek: any = undefined;
+    do {
+      const cRes = await ddb.send(new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': `USER#${userId}`, ':sk': 'SESSION#' },
+        Select: 'COUNT',
+        ExclusiveStartKey: lek,
+      }));
+      totalSessions += cRes.Count || 0;
+      lek = cRes.LastEvaluatedKey;
+    } while (lek);
+
+    const payload: any = {
       user: { isGuest, ...(claims.sub ? { userId: claims.sub } : {}) },
       streaks: { daily, focus, noDeath },
+      totalSessions,
       recentSessions: sessions.slice(0, 5),
     };
 
