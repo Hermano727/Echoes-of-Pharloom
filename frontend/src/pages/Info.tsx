@@ -11,9 +11,9 @@ const Info: React.FC = () => {
   return (
     <div className="relative w-screen min-h-screen overflow-y-auto text-white bg-black font-trajan">
       <img
-        src="/assets/images/temp_home_bg.jpg"
+        src="/assets/images/home_bg.jpg"
         alt="Background"
-        className="absolute inset-0 w-full h-full object-cover opacity-55"
+        className="absolute inset-0 w-full h-full object-cover opacity-65"
         onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
       />
       <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent pointer-events-none" />
