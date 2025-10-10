@@ -83,11 +83,13 @@ export class EchoesInfraStack extends Stack {
           cognito.OAuthScope.PROFILE,
         ],
         callbackUrls: [
-          'http://localhost:3000/auth/callback', // Development
+          'http://localhost:3000/auth/callback',
+          'https://echoesofpharloom.com/auth/callback',
           // Add production URLs later: 'https://yourdomain.com/auth/callback'
         ],
         logoutUrls: [
-          'http://localhost:3000/', // Development
+          'http://localhost:3000/',
+          'https://echoesofpharloom.com',
           // Add production URLs later: 'https://yourdomain.com/'
         ],
       },
@@ -192,7 +194,12 @@ export class EchoesInfraStack extends Stack {
       runtime: Runtime.NODEJS_20_X,
       memorySize: 256,
       timeout: Duration.seconds(7),
-      bundling: { minify: true, target: 'es2020' },
+      bundling: {
+        minify: true,
+        target: 'es2020',
+        nodeModules: ['resend'],
+      },
+      depsLockFilePath: path.join(__dirname, '../../services/package-lock.json'),
       environment: {
         RESEND_API_KEY: process.env.RESEND_API_KEY || '',
         CONTACT_TO_EMAIL: process.env.CONTACT_TO_EMAIL || 'hh727w@gmail.com',

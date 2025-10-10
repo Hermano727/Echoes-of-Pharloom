@@ -233,11 +233,12 @@ const CreateSession: React.FC = () => {
             <label className="block mb-2 opacity-80">Break Duration ({testMode ? 'seconds' : 'minutes'})</label>
             <input
               type="number"
-              min={0}
+              min={testMode ? 0 : 1}
               max={testMode ? MAX_BREAK_SEC : MAX_BREAK_MIN}
               value={testMode ? breakDurationSec : breakDurationMin}
               onChange={(e) => {
-                const v = Math.max(0, Number(e.target.value));
+                const minVal = testMode ? 0 : 1;
+                const v = Math.max(minVal, Number(e.target.value));
                 if (testMode) setBreakDurationSec(v); else setBreakDurationMin(v);
               }}
               className="w-32 px-3 py-2 bg-white/10 border border-white/20 rounded-md"
