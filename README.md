@@ -7,7 +7,7 @@ Echoes of Pharloom is a focused study companion that combines session tracking, 
 ### Documentation
 
 Full internal documentation, including a complete technical overview, architectural diagrams, and component references, is available here:  
-👉 [Echoes of Pharloom Technical Overview](https://docs.google.com/document/d/1-PFfj60IWHIwPLEwis_iFzIdUSUc_xD6zW_ymEm-iLw/edit?usp=sharing)
+[Echoes of Pharloom Technical Overview](https://docs.google.com/document/d/1-PFfj60IWHIwPLEwis_iFzIdUSUc_xD6zW_ymEm-iLw/edit?usp=sharing)
 
 ---
 
@@ -35,7 +35,7 @@ Full internal documentation, including a complete technical overview, architectu
 
 ---
 
-### 🗂 Repository Structure
+### Repository Structure
 .github/
 └─ workflows/ # CI/CD and build automation
 cdk.out/ # CDK output artifacts (generated)
@@ -52,7 +52,7 @@ services/
 
 ---
 
-### 🧠 Overview
+### Overview
 
 Echoes of Pharloom connects a user’s study sessions with structured feedback loops.  
 - The **frontend** manages user sessions, audio ambience, streaks, and UI flows.  
