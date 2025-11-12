@@ -9,11 +9,9 @@ import type { SessionPlan } from '../local/data';
 
 interface UiSegment { area: string; duration: number }
 
-const MIN_DURATION_MIN = 5;
 const MAX_DURATION_MIN = 120;
 const MAX_BREAK_MIN = 15;
 
-const MIN_DURATION_SEC = 5;
 const MAX_DURATION_SEC = 1800; // 30 minutes upper bound for test mode
 const MAX_BREAK_SEC = 600; // 10 minutes break max in test mode
 

@@ -45,8 +45,23 @@ const InAppReset: React.FC = () => {
     }
   };
 
+
   const confirm = async () => {
     try {
+      // Client-side validation first
+      if (!newPass) {
+        setPhase('error');
+        setMsg('New password cannot be empty');
+        return;
+      }
+
+      const errors = validatePassword(newPass);
+      if (errors.length > 0) {
+        setPhase('error');
+        setMsg(`Password must contain ${errors.join(', ')}`);
+        return;
+      }
+
       setMsg('Confirming...');
       await call('ConfirmForgotPassword', { ClientId: cfg.clientId, Username: email, ConfirmationCode: code, Password: newPass });
       setPhase('done'); setMsg('Password reset. You can sign in with the new password.');
@@ -86,6 +101,15 @@ const InAppReset: React.FC = () => {
   );
 };
 
+const validatePassword = (pwd: string) => {
+  const errors = [];
+  if (pwd.length < 8) errors.push('at least 8 characters');
+  if (!/[A-Z]/.test(pwd)) errors.push('an uppercase letter');
+  if (!/[a-z]/.test(pwd)) errors.push('a lowercase letter');
+  if (!/[0-9]/.test(pwd)) errors.push('a number');
+  if (!/[^A-Za-z0-9]/.test(pwd)) errors.push('a special character');
+  return errors;
+}
 
 const ChangePassword: React.FC = () => {
   const [curr, setCurr] = React.useState('');
@@ -97,43 +121,104 @@ const ChangePassword: React.FC = () => {
   const change = async () => {
     try {
       if (next !== confirm) { setMsg('Passwords do not match'); return; }
+
       if (!cfg.region) { setMsg('Region not configured'); return; }
+
+      if (!next) { setMsg('New password cannot be empty'); return; }
+
+      const errors = validatePassword(next);
+      if (errors.length > 0) {
+        setMsg(`Password must contain ${errors.join(', ')}`);
+        return;
+      }
+
       const raw = localStorage.getItem('authTokens');
       const tok = raw ? JSON.parse(raw) : null;
       const access = tok?.access_token;
+
       if (!access) { setMsg('Missing access token; sign in again'); return; }
+
       const url = `https://cognito-idp.${cfg.region}.amazonaws.com/`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/x-amz-json-1.1', 'x-amz-target': 'AWSCognitoIdentityProviderService.ChangePassword' },
         body: JSON.stringify({ PreviousPassword: curr, ProposedPassword: next, AccessToken: access })
       });
+
       if (!res.ok) { const t = await res.text().catch(()=> ''); throw new Error(`ChangePassword failed: ${res.status} ${t}`); }
       setMsg('Password changed successfully');
+
     } catch (e: any) { setMsg(e.message || 'Change password failed'); }
   };
 
   return (
-    <div className="bg-black/30 border border-white/15 rounded-lg p-4 space-y-3">
-      <h3 className="text-lg">Change password</h3>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+    <div className="bg-black/25 border border-white/10 rounded-xl p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold tracking-wide">Change password</h3>
+        <div className="text-xs text-white/60">Keep your account secure</div>
+      </div>
+
+      <div className="space-y-3">
         <div>
-          <label className="block text-sm opacity-80 mb-1">Current password</label>
-          <input type="password" value={curr} onChange={(e)=>setCurr(e.target.value)} className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded" />
+          <label className="block text-xs uppercase tracking-wider text-white/60 mb-1">Current password</label>
+          <input
+            type="password"
+            value={curr}
+            onChange={(e) => setCurr(e.target.value)}
+            className="w-full bg-transparent border border-white/12 rounded-md px-3 py-2 text-sm placeholder:text-white/40 focus:outline-none focus:border-white/30"
+            placeholder="Enter current password"
+            aria-label="Current password"
+          />
         </div>
+
         <div>
-          <label className="block text-sm opacity-80 mb-1">New password</label>
-          <input type="password" value={next} onChange={(e)=>setNext(e.target.value)} className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded" />
+          <label className="block text-xs uppercase tracking-wider text-white/60 mb-1">New password</label>
+          <input
+            type="password"
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+            className="w-full bg-transparent border border-white/12 rounded-md px-3 py-2 text-sm placeholder:text-white/40 focus:outline-none focus:border-white/30"
+            placeholder="Choose a strong password"
+            aria-label="New password"
+          />
         </div>
+
         <div>
-          <label className="block text-sm opacity-80 mb-1">Confirm new password</label>
-          <input type="password" value={confirm} onChange={(e)=>setConfirm(e.target.value)} className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded" />
+          <label className="block text-xs uppercase tracking-wider text-white/60 mb-1">Confirm new password</label>
+          <input
+            type="password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            className="w-full bg-transparent border border-white/12 rounded-md px-3 py-2 text-sm placeholder:text-white/40 focus:outline-none focus:border-white/30"
+            placeholder="Repeat new password"
+            aria-label="Confirm new password"
+          />
         </div>
       </div>
-      <div>
-        <button onClick={change} className="px-4 py-2 rounded-full bg-white/20 hover:bg-white/35">Change password</button>
+
+      <div className="flex items-center justify-between gap-4">
+        <div className="text-xs text-white/60">
+          Password must be at least 8 characters and include an uppercase, lowercase, number and symbol.
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => { setCurr(''); setNext(''); setConfirm(''); setMsg(''); }}
+            className="px-4 py-2 rounded-md bg-white/6 hover:bg-white/8 text-sm transition"
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            onClick={change}
+            className="px-4 py-2 rounded-md bg-white/20 hover:bg-white/30 text-sm font-semibold transition"
+          >
+            Change password
+          </button>
+        </div>
       </div>
-      {msg && <div className="text-xs opacity-80">{msg}</div>}
+
+      {msg && <div className="text-sm text-white/70 pt-1">{msg}</div>}
     </div>
   );
 };
