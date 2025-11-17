@@ -5,7 +5,6 @@ import FloatingFeedback from '../components/FloatingFeedback';
 import FeedbackModal from '../components/FeedbackModal';
 
 const Info: React.FC = () => {
-  const navigate = useNavigate();
   const [modalOpen, setModalOpen] = React.useState(false);
   const [modalType, setModalType] = React.useState<'feedback' | 'bug' | null>(null);
   return (
@@ -25,7 +24,7 @@ const Info: React.FC = () => {
 
         <div className="space-y-4 bg-black/40 border border-white/15 rounded-xl p-6">
           <section>
-            <h2 className="text-xl mb-2">What is this?</h2>
+            <h2 className="text-xl mb-2">DISCLAIMER: Unofficial fan project</h2>
             <p className="opacity-90">A Silksong‑inspired study timer with ambient zones, simple streaks, and a clean, video‑backed focus mode.</p>
           </section>
           <section>
@@ -35,11 +34,6 @@ const Info: React.FC = () => {
               <li><strong>Focus</strong>: sessions in a row where you reached the first break without losing focus.</li>
               <li><strong>Total Sessions</strong>: total completed sessions. In the future, this will become the HP “No‑Death” feature.</li>
             </ul>
-          </section>
-          <section>
-            <h2 className="text-xl mb-2">Support</h2>
-            <p className="opacity-90">If you enjoy this demo, consider donating:</p>
-            <a href="https://ko-fi.com/" target="_blank" rel="noreferrer" className="inline-block mt-2 px-4 py-2 rounded-full bg-white/15 hover:bg-white/30">Donate on Ko‑fi</a>
           </section>
           <section className="opacity-70 text-sm">
             <p>Unofficial fan project. Not affiliated with Team Cherry. For demo and educational purposes only.</p>

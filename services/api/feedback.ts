@@ -35,7 +35,13 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     const subject = `New ${type} from ${name}`;
     const text = `Type: ${type}\nName: ${name}\nEmail: ${email}\n\nMessage:\n${message}`;
 
-    const { error } = await resend.emails.send({ from, to, subject, text, replyTo: email });
+    const { error } = await resend.emails.send({
+       from, 
+       to, 
+       subject, 
+       text, 
+       replyTo: email });
+
     if (error) {
       console.error('Resend error', error);
       return { statusCode: 500, headers, body: JSON.stringify({ error: 'Failed to send email' }) } as any;
