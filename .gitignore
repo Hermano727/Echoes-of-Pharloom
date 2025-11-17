@@ -10,10 +10,6 @@ pnpm-debug.log*
 **/dist/
 **/build/
 
-# Frontend assets generated at runtime
-/frontend/public/assets/videos/
-
-
 # Misc
 .DS_Store
 *.local
