@@ -24,7 +24,7 @@ import { sendFeedback } from '../api';
      if (!human) return; // simple captcha gate
      try {
        setSending(true);
-       const res: any = await sendFeedback({ type, name: name || 'Anonymous', email, message, company: honeypot });
+       await sendFeedback({ type, name: name || 'Anonymous', email, message, company: honeypot });
        // Treat HTTP 200 as success
        setDone(true);
        setName(''); setEmail(''); setMessage('');

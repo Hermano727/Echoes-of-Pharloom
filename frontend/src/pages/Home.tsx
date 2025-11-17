@@ -135,6 +135,11 @@ className="px-10 py-2 rounded-full bg-white/5 hover:bg-white/15 transition-color
           </div>
         </div>
 
+        <div className="mt-2 text-sm opacity-80">
+          <span className="mr-4">Areas: {areas.length}</span>
+          <span>Recent sessions: {recentSessions.length}</span>
+        </div>
+
         {error && <div className="mb-4 text-red-300">{error}</div>}
 
         <FloatingFeedback onOpen={(t) => { setModalType(t); setModalOpen(true); }} />

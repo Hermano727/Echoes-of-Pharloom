@@ -1,5 +1,4 @@
 import React from 'react';
-import { useNavigate } from 'react-router';
 import HomeButton from '../components/HomeButton';
 import FloatingFeedback from '../components/FloatingFeedback';
 import FeedbackModal from '../components/FeedbackModal';

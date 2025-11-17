@@ -100,17 +100,6 @@ export function getRecentSessions(limit = 5): Array<{ sessionId: string; started
   });
 }
 
-function sameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-function dayMinus(d: Date, days: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() - days);
-  x.setHours(0, 0, 0, 0);
-  return x;
-}
-
 export function computeStreaks(): { daily: number; focus: number; noDeath: number } {
   const sessions = readAll();
   // Daily streak uses completed sessions only (no time minimum). Focus can be based on reaching break.
@@ -124,8 +113,6 @@ export function computeStreaks(): { daily: number; focus: number; noDeath: numbe
   }
   let daily = 0;
   if (byDay.size > 0) {
-    const today = new Date();
-    const todayKey = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
     // Find most recent day key with completions (could be today or earlier)
     const keys = Array.from(byDay.keys()).sort((a, b) => b - a);
     let cursor = keys[0];

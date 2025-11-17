@@ -234,6 +234,7 @@ const App: React.FC = () => {
   
   const audioManagerRef = useRef<AudioManager | null>(null);
   const videoManagerRef = useRef<VideoManager | null>(null);
+  const ctrlPressRef = useRef<number[]>([]);
 
   useEffect(() => {
     if (audioRef.current && !audioManagerRef.current) {
@@ -274,7 +275,7 @@ const App: React.FC = () => {
     } catch (e) {
       console.warn('init failed', e);
     }
-  }, [initializeFromPlan]);
+  }, [initializeFromPlan, timerState.selectedAreaName, timerState.timeLeft]);
 
   // cleanup for transient overlay timeout on unmount
   useEffect(() => {
@@ -386,6 +387,7 @@ const App: React.FC = () => {
         clearInterval(intervalRef.current);
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timerState.isRunning, phase]);
 
   const triggerActionOverlay = useCallback((type: ActionOverlayType) => {
@@ -589,7 +591,7 @@ const App: React.FC = () => {
     audioManagerRef.current?.pause();
     videoManagerRef.current?.pause();
     setShowConfirmReset(true);
-  }, [timerState.isRunning, phase, segmentIndex]);
+  }, [timerState.isRunning]);
 
   // Removed separate break countdown effects; handled in main interval
 
@@ -614,7 +616,7 @@ const App: React.FC = () => {
       window.removeEventListener('blur', onBlur);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [timerState.isRunning, addToast]);
+  }, [timerState.isRunning, addToast, sendEvent]);
 
   const confirmReset = useCallback(() => {
     // Re-initialize using remembered plan if available
@@ -632,7 +634,7 @@ const App: React.FC = () => {
     videoManagerRef.current?.reset();
     setShowConfirmReset(false);
     triggerActionOverlay('reset');
-  }, [initializeFromPlan, triggerActionOverlay, timerState.selectedAreaName]);
+  }, [initializeFromPlan, triggerActionOverlay, timerState.selectedAreaName, timerState.timeLeft]);
 
   const cancelReset = useCallback(() => {
     setShowConfirmReset(false);
@@ -673,9 +675,7 @@ const App: React.FC = () => {
     setShowUi(true);
   }, [triggerActionOverlay]);
   
-  const onToggleDebugInfo = useCallback(() => {
-    setShowDebugInfo(prev => !prev);
-  }, []);
+  
 
   // Revert to simple inactivity auto-hide (works reliably outside fullscreen)
   useEffect(() => {
@@ -695,11 +695,35 @@ const App: React.FC = () => {
   // keyboard shortcuts
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // Special debug toggle sequence: double Ctrl then F, or F5
+      if (e.key === 'Control') {
+        const now = Date.now();
+        const arr = ctrlPressRef.current;
+        arr.push(now);
+        if (arr.length > 2) arr.shift();
+        return;
+      }
+      if (e.key === 'F5') {
+        e.preventDefault();
+        setShowDebugInfo(v => !v);
+        ctrlPressRef.current = [];
+        return;
+      }
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target as HTMLElement)?.isContentEditable) {
         return; // avoid interfering with typing
       }
       const key = e.key.toLowerCase();
+      // If user pressed 'f' and recently pressed Ctrl twice, toggle debug
+      if (key === 'f') {
+        const arr = ctrlPressRef.current;
+        if (arr.length >= 2 && (arr[1] - arr[0]) < 800 && (Date.now() - arr[1]) < 1200) {
+          e.preventDefault();
+          setShowDebugInfo(v => !v);
+          ctrlPressRef.current = [];
+          return;
+        }
+      }
       const inc = () => onVolumeChange(Math.min(1, uiVolume + 0.05));
       const dec = () => onVolumeChange(Math.max(0, uiVolume - 0.05));
 
@@ -741,7 +765,7 @@ const App: React.FC = () => {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [audioState.volume, onPause, onStart, onToggleCollapse, onVolumeChange, onReset, timerState.isRunning]);
+  }, [audioState.volume, onPause, onStart, onToggleCollapse, onVolumeChange, onReset, timerState.isRunning, showHelp, uiVolume]);
 
   // minute change subtle fade
   useEffect(() => {
@@ -911,6 +935,7 @@ className={`absolute left-1/2 -translate-x-1/2 top-[18%] md:top-[14%] lg:top-[12
           >
             <img src="/assets/ui/edit.svg" alt="Create Session" className="w-6 h-6" />
           </button>
+          
         </div>
 
         {/* Profile top-right (account) */}
@@ -980,21 +1005,24 @@ className={`absolute left-1/2 -translate-x-1/2 top-[18%] md:top-[14%] lg:top-[12
       )}
 
       {showDebugInfo && (
-        <div className="debug-info absolute bottom-20 left-4 p-4 bg-black bg-opacity-50 text-white rounded text-sm max-w-sm overflow-auto">
-          <p className="font-bold mb-2">Debug Info:</p>
-          <p>Audio Source: {getAreaByName(timerState.selectedAreaName)?.audioPath}</p>
-          <p>Audio Loaded: {audioState.isLoaded ? 'Yes' : 'No'}</p>
-          <p>Audio Playing: {audioState.isPlaying ? 'Yes' : 'No'}</p>
-          <p>Timer Running: {timerState.isRunning ? 'Yes' : 'No'}</p>
-          <p>Audio Duration: {audioState.duration ? `${audioState.duration.toFixed(1)}s` : 'Unknown'}</p>
-          <p>Audio Current Time: {audioState.currentTime.toFixed(1)}s</p>
-          <p>Volume (UI): {Math.round(uiVolume * 100)}%</p>
-          <p>Video Source: {getAreaByName(timerState.selectedAreaName)?.videoPath}</p>
-          <p>Video Loaded: {videoState.isLoaded ? 'Yes' : 'No'}</p>
-          <p>Video Playing: {videoState.isPlaying ? 'Yes' : 'No'}</p>
-          {audioState.error && (
-            <p className="text-red-400 mt-2">Error: {audioState.error}</p>
-          )}
+        <div className="debug-info fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 p-3 bg-black/40 backdrop-blur-sm text-white rounded-md text-sm w-[min(520px,90%)] shadow-lg border border-white/10">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-semibold mb-2">Debug</p>
+              <p className="text-xs opacity-90">Audio Source: {getAreaByName(timerState.selectedAreaName)?.audioPath}</p>
+              <p className="text-xs opacity-90">Audio Loaded: {audioState.isLoaded ? 'Yes' : 'No'}</p>
+              <p className="text-xs opacity-90">Audio Playing: {audioState.isPlaying ? 'Yes' : 'No'}</p>
+              <p className="text-xs opacity-90">Timer Running: {timerState.isRunning ? 'Yes' : 'No'}</p>
+              <p className="text-xs opacity-90">Segment Remaining: {segmentRemaining}s</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs opacity-90">Audio: {audioState.duration ? `${audioState.duration.toFixed(1)}s` : 'Unknown'}</p>
+              <p className="text-xs opacity-90">Time: {audioState.currentTime.toFixed(1)}s</p>
+              <p className="text-xs opacity-90">Vol: {Math.round(uiVolume * 100)}%</p>
+              <p className="text-xs opacity-90">Video: {videoState.isLoaded ? 'Yes' : 'No'}</p>
+              {audioState.error && (<p className="text-red-300 text-xs mt-1">Error: {audioState.error}</p>)}
+            </div>
+          </div>
         </div>
       )}
     </div>

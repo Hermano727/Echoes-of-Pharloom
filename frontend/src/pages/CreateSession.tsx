@@ -70,7 +70,6 @@ const CreateSession: React.FC = () => {
       // Build randomized segments from available areas
       const areaKeys = Object.keys(STUDY_AREAS);
       const totalSec = testMode ? Math.max(1, Math.floor(totalDuration)) : Math.max(60, Math.floor(totalDuration * 60));
-      const n = Math.max(1, Math.min(segmentsCount, areaKeys.length));
       const allowDupes = totalSec > 3600;
       const chosen: string[] = [];
       const pool = [...areaKeys];
@@ -110,7 +109,6 @@ const CreateSession: React.FC = () => {
     try {
       const rawTok = localStorage.getItem('authTokens');
       const hasAuth = !!rawTok;
-      const base = (window as any).API_BASE || undefined; // optional global
       if (hasAuth) {
         const mod = await import('../api');
         const res = await mod.createSession(plan);

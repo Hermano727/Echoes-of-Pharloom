@@ -4,7 +4,7 @@ import { useAuth } from '../auth/AuthContext';
 import { computeStreaks, getRecentSessions } from '../local/data';
 import FloatingFeedback from '../components/FloatingFeedback';
 import FeedbackModal from '../components/FeedbackModal';
-import { getAuthConfig, isCognitoConfigured } from '../config/auth';
+import { getAuthConfig } from '../config/auth';
 import { updateProfile } from '../api';
 
 // In-app reset (Cognito ForgotPassword + ConfirmForgotPassword)
@@ -236,9 +236,6 @@ const Profile: React.FC = () => {
   const [tab, setTab] = React.useState<'overview' | 'info' | 'privacy'>('overview');
   const [photo, setPhoto] = React.useState<string | null>(() => {
     try { return localStorage.getItem('profilePhoto') || null; } catch { return null; }
-  });
-  const [phone, setPhone] = React.useState<string>(() => {
-    try { return localStorage.getItem('profilePhone') || ''; } catch { return ''; }
   });
   const [nameDraft, setNameDraft] = React.useState<string>(user?.name || '');
   const [savingProfile, setSavingProfile] = React.useState<'idle'|'saving'|'saved'|'error'>('idle');
