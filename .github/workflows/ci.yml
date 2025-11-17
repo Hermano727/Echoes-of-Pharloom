@@ -23,8 +23,17 @@ jobs:
           npm install
           npm run build
 
-      - name: Infra install and synth
+      - name: Infra install
         working-directory: infra
         run: |
           npm install
+
+      - name: Services install
+        working-directory: services
+        run: |
+          npm install
+
+      - name: Infra synth
+        working-directory: infra
+        run: |
           npx cdk synth
